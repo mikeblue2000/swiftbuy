@@ -124,7 +124,37 @@ const seedProducts = [
 ];
 
 let db = { products: [], orders: [], users: [], coupons: [], newsletter: [], messages: [] };
-const sessions = {};
+const sessions = {}; // token -> { userId, expiresAt }
+const SESSION_TTL = 7 * 24 * 3600000; // 7 days
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@swiftbuy.local').toLowerCase();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@2026';
+const rateHits = {}; // key -> { count, resetAt }
+
+function rateLimit(key, max, windowMs) {
+    const now = Date.now();
+    let e = rateHits[key];
+    if (!e || e.resetAt <= now) {
+        e = { count: 0, resetAt: now + windowMs };
+        rateHits[key] = e;
+    }
+    e.count++;
+    return e.count <= max;
+}
+
+function rateKey(req, label) {
+    return label + ':' + (req.socket.remoteAddress || 'unknown');
+}
+
+function cleanExpiredSessions() {
+    const now = Date.now();
+    for (const k of Object.keys(sessions)) {
+        if (sessions[k].expiresAt <= now) delete sessions[k];
+    }
+    for (const k of Object.keys(rateHits)) {
+        if (rateHits[k].resetAt <= now) delete rateHits[k];
+    }
+}
+setInterval(cleanExpiredSessions, 10 * 60000).unref();
 
 function loadDb() {
     try {
@@ -147,6 +177,21 @@ function loadDb() {
     if (!Array.isArray(db.newsletter)) db.newsletter = [];
     if (!Array.isArray(db.messages)) db.messages = [];
     if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+    if (!db.users.some(u => u.role === 'admin')) {
+        const salt = crypto.randomBytes(16).toString('hex');
+        db.users.push({
+            id: nextId(db.users),
+            name: 'SwiftBuy Admin',
+            email: ADMIN_EMAIL,
+            salt,
+            passwordHash: hashPassword(ADMIN_PASSWORD, salt),
+            role: 'admin',
+            createdAt: Date.now()
+        });
+        saveDb();
+        console.log('Seeded admin account: ' + ADMIN_EMAIL + ' (password from ADMIN_PASSWORD env or default). CHANGE THE DEFAULT PASSWORD!');
+    }
 }
 
 function saveDb() {
@@ -195,12 +240,22 @@ function readJson(req) {
     });
 }
 
+function securityHeaders() {
+    return {
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'no-referrer',
+        'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; font-src 'self' data: https://cdnjs.cloudflare.com; connect-src 'self' http://localhost:3000; base-uri 'self'; form-action 'self'"
+    };
+}
+
 function sendJson(res, code, obj) {
     res.writeHead(code, {
         'Content-Type': 'application/json; charset=utf-8',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        ...securityHeaders()
     });
     res.end(JSON.stringify(obj));
 }
@@ -215,7 +270,24 @@ function nextId(list) {
 }
 
 function generateOrderCode() {
-    return 'SB-' + Math.floor(10000 + Math.random() * 89999);
+    return 'SB-' + crypto.randomBytes(6).toString('hex').toUpperCase();
+}
+
+function maskPhone(phone) {
+    const p = String(phone || '');
+    return p.length <= 4 ? p : p.slice(0, 4) + '****' + p.slice(-2);
+}
+
+function maskName(name) {
+    const n = String(name || '');
+    const parts = n.trim().split(/\s+/);
+    if (parts.length === 0) return '';
+    return parts[0] + (parts.length > 1 ? ' ' + parts[1].charAt(0) + '.' : '');
+}
+
+function maskAddress(address) {
+    const a = String(address || '');
+    return a.length <= 12 ? a : a.slice(0, 12) + '...';
 }
 
 function fmtTime(ms) {
@@ -248,7 +320,8 @@ const STATUS_LABEL = {
     delivered: 'Delivered'
 };
 
-function publicOrder(order) {
+function publicOrder(order, opts) {
+    const mask = opts && opts.maskPII;
     const status = effectiveStatus(order);
     const idx = STATUS_ORDER.indexOf(status);
     const steps = [
@@ -260,7 +333,13 @@ function publicOrder(order) {
 
     return {
         id: order.id,
-        customer: order.customer,
+        customer: mask
+            ? {
+                name: maskName(order.customer.name),
+                phone: maskPhone(order.customer.phone),
+                address: maskAddress(order.customer.address)
+            }
+            : order.customer,
         payment: order.payment,
         items: order.items,
         subtotal: order.subtotal,
@@ -307,20 +386,33 @@ function hashPassword(password, salt) {
 
 function createSession(userId) {
     const token = crypto.randomBytes(24).toString('hex');
-    sessions[token] = userId;
+    sessions[token] = { userId, expiresAt: Date.now() + SESSION_TTL };
     return token;
 }
 
 function authUser(req) {
     const header = req.headers['authorization'] || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-    const userId = sessions[token];
-    if (!userId) return null;
-    return db.users.find(u => u.id === userId) || null;
+    const session = sessions[token];
+    if (!session) return null;
+    if (session.expiresAt <= Date.now()) {
+        delete sessions[token];
+        return null;
+    }
+    const user = db.users.find(u => u.id === session.userId) || null;
+    if (user && session.expiresAt - Date.now() < SESSION_TTL / 4) {
+        session.expiresAt = Date.now() + SESSION_TTL;
+    }
+    return user;
+}
+
+function authAdmin(req) {
+    const user = authUser(req);
+    return user && user.role === 'admin' ? user : null;
 }
 
 function publicUser(u) {
-    return { id: u.id, name: u.name, email: u.email, createdAt: u.createdAt };
+    return { id: u.id, name: u.name, email: u.email, role: u.role || 'customer', createdAt: u.createdAt };
 }
 
 // ---------- STATS ----------
@@ -360,7 +452,8 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(204, {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            ...securityHeaders()
         });
         return res.end();
     }
@@ -371,19 +464,22 @@ const server = http.createServer(async (req, res) => {
 
     // ---------------- AUTH ----------------
     if (pathname === '/api/auth/register' && req.method === 'POST') {
+        if (!rateLimit(rateKey(req, 'reg'), 10, 60000)) {
+            return sendJson(res, 429, { error: 'Too many attempts. Please wait a minute.' });
+        }
         const body = await readJson(req);
         if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
         const name = (body.name || '').toString().trim();
         const email = (body.email || '').toString().trim().toLowerCase();
         const password = (body.password || '').toString();
-        if (!name || !email.includes('@') || password.length < 4) {
-            return sendJson(res, 400, { error: 'Name, valid email and a password of at least 4 characters are required' });
+        if (!name || !email.includes('@') || password.length < 8) {
+            return sendJson(res, 400, { error: 'Name, valid email and a password of at least 8 characters are required' });
         }
         if (db.users.some(u => u.email === email)) {
             return sendJson(res, 409, { error: 'An account with this email already exists. Try signing in.' });
         }
         const salt = crypto.randomBytes(16).toString('hex');
-        const user = { id: nextId(db.users), name, email, salt, passwordHash: hashPassword(password, salt), createdAt: Date.now() };
+        const user = { id: nextId(db.users), name, email, salt, passwordHash: hashPassword(password, salt), role: 'customer', createdAt: Date.now() };
         db.users.push(user);
         saveDb();
         const token = createSession(user.id);
@@ -391,16 +487,35 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/auth/login' && req.method === 'POST') {
+        if (!rateLimit(rateKey(req, 'login'), 10, 60000)) {
+            return sendJson(res, 429, { error: 'Too many attempts. Please wait a minute.' });
+        }
         const body = await readJson(req);
         if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
         const email = (body.email || '').toString().trim().toLowerCase();
         const password = (body.password || '').toString();
         const user = db.users.find(u => u.email === email);
-        if (!user || user.passwordHash !== hashPassword(password, user.salt)) {
+        if (!user || !user.passwordHash || user.passwordHash !== hashPassword(password, user.salt)) {
             return sendJson(res, 401, { error: 'Incorrect email or password' });
         }
         const token = createSession(user.id);
         return sendJson(res, 200, { token, user: publicUser(user) });
+    }
+
+    if (pathname === '/api/auth/password' && req.method === 'PUT') {
+        const user = authUser(req);
+        if (!user) return sendJson(res, 401, { error: 'Not signed in' });
+        const body = await readJson(req);
+        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
+        const password = (body.password || '').toString();
+        if (password.length < 8) {
+            return sendJson(res, 400, { error: 'Password must be at least 8 characters' });
+        }
+        const salt = crypto.randomBytes(16).toString('hex');
+        user.salt = salt;
+        user.passwordHash = hashPassword(password, salt);
+        saveDb();
+        return sendJson(res, 200, { ok: true });
     }
 
     if (pathname === '/api/auth/me' && req.method === 'GET') {
@@ -422,6 +537,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/products' && req.method === 'POST') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
         const body = await readJson(req);
         if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
         const check = validateProduct(body);
@@ -439,6 +555,7 @@ const server = http.createServer(async (req, res) => {
         if (idx === -1) return sendJson(res, 404, { error: 'Product not found' });
 
         if (req.method === 'PUT') {
+            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
             const body = await readJson(req);
             if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
             const check = validateProduct(body);
@@ -449,6 +566,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (req.method === 'DELETE') {
+            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
             const [removed] = db.products.splice(idx, 1);
             db.orders.forEach(o => {
                 o.items = o.items.filter(i => Number(i.id) !== pid);
@@ -462,7 +580,8 @@ const server = http.createServer(async (req, res) => {
 
     // ---------------- ORDERS ----------------
     if (pathname === '/api/orders' && req.method === 'GET') {
-        return sendJson(res, 200, db.orders.slice().reverse().map(publicOrder));
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
+        return sendJson(res, 200, db.orders.slice().reverse().map(o => publicOrder(o, { maskPII: false })));
     }
 
     if (pathname === '/api/orders' && req.method === 'POST') {
@@ -530,10 +649,14 @@ const server = http.createServer(async (req, res) => {
         if (idx === -1) return sendJson(res, 404, { error: 'Order not found' });
 
         if (req.method === 'GET') {
-            return sendJson(res, 200, publicOrder(db.orders[idx]));
+            if (!rateLimit(rateKey(req, 'track'), 30, 60000)) {
+                return sendJson(res, 429, { error: 'Too many tracking lookups. Please slow down.' });
+            }
+            return sendJson(res, 200, publicOrder(db.orders[idx], { maskPII: true }));
         }
 
         if (req.method === 'PUT') {
+            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
             const body = await readJson(req);
             if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
             if (body.status && !STATUS_ORDER.includes(body.status)) {
@@ -541,7 +664,7 @@ const server = http.createServer(async (req, res) => {
             }
             db.orders[idx].status = body.status || null;
             saveDb();
-            return sendJson(res, 200, publicOrder(db.orders[idx]));
+            return sendJson(res, 200, publicOrder(db.orders[idx], { maskPII: false }));
         }
 
         return sendJson(res, 405, { error: 'Method not allowed' });
@@ -549,10 +672,12 @@ const server = http.createServer(async (req, res) => {
 
     // ---------------- COUPONS ----------------
     if (pathname === '/api/coupons' && req.method === 'GET') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
         return sendJson(res, 200, db.coupons);
     }
 
     if (pathname === '/api/coupons' && req.method === 'POST') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
         const body = await readJson(req);
         if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
         const code = (body.code || '').toString().trim().toUpperCase();
@@ -576,6 +701,7 @@ const server = http.createServer(async (req, res) => {
         if (idx === -1) return sendJson(res, 404, { error: 'Coupon not found' });
 
         if (req.method === 'PUT') {
+            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
             const body = await readJson(req);
             if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
             if (body.active !== undefined) db.coupons[idx].active = !!body.active;
@@ -586,6 +712,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (req.method === 'DELETE') {
+            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
             const [removed] = db.coupons.splice(idx, 1);
             saveDb();
             return sendJson(res, 200, { deleted: true, code: removed.code });
@@ -605,11 +732,13 @@ const server = http.createServer(async (req, res) => {
 
     // ---------------- STATS ----------------
     if (pathname === '/api/stats' && req.method === 'GET') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
         return sendJson(res, 200, computeStats());
     }
 
     // ---------------- UPLOADS ----------------
     if (pathname === '/api/upload' && req.method === 'POST') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
         const rawName = (req.headers['x-filename'] || 'image.jpg').toString().split(/[\\/]/).pop().toLowerCase();
         const ext = path.extname(rawName) || '.jpg';
         if (!['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) {
@@ -618,6 +747,16 @@ const server = http.createServer(async (req, res) => {
         const buf = await readBody(req);
         if (!buf || buf.length === 0) return sendJson(res, 400, { error: 'Empty upload' });
         if (buf.length > 5 * 1024 * 1024) return sendJson(res, 400, { error: 'Image must be under 5 MB' });
+        // magic byte validation so file contents match the claimed extension
+        const B = buf;
+        const magicOk =
+            ((ext === '.jpg' || ext === '.jpeg') && B.length > 3 && B[0] === 0xFF && B[1] === 0xD8 && B[2] === 0xFF) ||
+            (ext === '.png' && B.length > 8 && B[0] === 0x89 && B[1] === 0x50 && B[2] === 0x4E && B[3] === 0x47) ||
+            (ext === '.gif' && B.length > 6 && B[0] === 0x47 && B[1] === 0x49 && B[2] === 0x46 && B[3] === 0x38) ||
+            (ext === '.webp' && B.length > 12 && B[0] === 0x52 && B[1] === 0x49 && B[2] === 0x46 && B[3] === 0x46 && B[8] === 0x57 && B[9] === 0x45 && B[10] === 0x42 && B[11] === 0x50);
+        if (!magicOk) {
+            return sendJson(res, 400, { error: 'File contents do not match the image type' });
+        }
         const filename = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + ext;
         fs.writeFileSync(path.join(UPLOAD_DIR, filename), buf);
         return sendJson(res, 201, { url: '/uploads/' + filename });
@@ -661,9 +800,11 @@ const server = http.createServer(async (req, res) => {
             return sendText(res, 404, 'Not found');
         }
         const ext = path.extname(filePath).toLowerCase();
+        const isUpload = filePath.startsWith(path.join(ROOT, 'uploads'));
         res.writeHead(200, {
             'Content-Type': MIME[ext] || 'application/octet-stream',
-            'Cache-Control': 'no-cache'
+            'Cache-Control': 'no-cache',
+            ...(isUpload ? { 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' } : securityHeaders())
         });
         res.end(content);
     });

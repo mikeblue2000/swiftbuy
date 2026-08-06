@@ -129,7 +129,7 @@
                     <button onclick="switchView('deals')" class="text-rose-600 font-bold flex items-center gap-1 hover:text-rose-700"><i class="fa-solid fa-fire"></i> Flash Sale</button>
                 </div>
                 <div class="flex items-center gap-4 text-gray-500 font-normal">
-                    <button onclick="switchView('admin')" class="text-indigo-600 font-extrabold flex items-center gap-1.5 hover:text-indigo-800 border border-indigo-200 px-3 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 transition-all shadow-sm">
+                    <button id="nav-admin-btn" onclick="switchView('admin')" class="hidden text-indigo-600 font-extrabold flex items-center gap-1.5 hover:text-indigo-800 border border-indigo-200 px-3 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 transition-all shadow-sm">
                         <i class="fa-solid fa-cloud-arrow-up"></i> Admin / Upload
                     </button>
                     <button onclick="switchView('about')" class="hover:text-gray-800">About Us</button>
@@ -151,7 +151,7 @@
         <div id="mobile-nav" class="hidden md:hidden bg-white border-b border-gray-200 px-4 py-3 space-y-2 text-sm">
             <button onclick="switchView('home'); toggleMobileNav();" class="block w-full text-left py-1.5 font-medium">Home</button>
             <button onclick="switchView('shop'); toggleMobileNav();" class="block w-full text-left py-1.5 font-medium">Shop Marketplace</button>
-            <button onclick="switchView('admin'); toggleMobileNav();" class="block w-full text-left py-2 text-indigo-600 font-extrabold bg-indigo-50 px-3 rounded-lg"><i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Seller Upload Portal</button>
+            <button id="nav-admin-mobile" onclick="switchView('admin'); toggleMobileNav();" class="hidden block w-full text-left py-2 text-indigo-600 font-extrabold bg-indigo-50 px-3 rounded-lg"><i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Seller Upload Portal</button>
             <button onclick="switchView('deals'); toggleMobileNav();" class="block w-full text-left py-1.5 font-bold text-rose-600">Flash Sale Deals</button>
             <button onclick="switchView('track'); toggleMobileNav();" class="block w-full text-left py-1.5 font-medium">Track Order</button>
             <button onclick="switchView('about'); toggleMobileNav();" class="block w-full text-left py-1.5 font-medium">About SwiftBuy</button>
@@ -739,7 +739,7 @@
                     <li><a href="#" onclick="switchView('home'); return false;" class="hover:text-white">Home</a></li>
                     <li><a href="#" onclick="switchView('shop'); return false;" class="hover:text-white">Shop Marketplace</a></li>
                     <li><a href="#" onclick="switchView('deals'); return false;" class="hover:text-white">Flash Sales</a></li>
-                    <li><a href="#" onclick="switchView('admin'); return false;" class="hover:text-amber-400 font-bold">Seller Upload Portal</a></li>
+                    <li id="nav-admin-footer" class="hidden"><a href="#" onclick="switchView('admin'); return false;" class="hover:text-amber-400 font-bold">Seller Upload Portal</a></li>
                 </ul>
             </div>
 
@@ -1195,6 +1195,11 @@
             const name = document.getElementById('account-name');
             const sub = document.getElementById('account-sub');
             const avatar = document.getElementById('account-avatar');
+            const isAdmin = !!(user && user.role === 'admin');
+            ['nav-admin-btn', 'nav-admin-mobile', 'nav-admin-footer'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.toggle('hidden', !isAdmin);
+            });
             if (user) {
                 name.innerText = user.name.split(' ')[0];
                 sub.innerText = user.email;
@@ -1277,6 +1282,7 @@
             if (authMode === 'register') {
                 const name = document.getElementById('auth-name').value.trim();
                 if (!name) return showAuthError('Please enter your full name.');
+                if (password.length < 8) return showAuthError('Password must be at least 8 characters.');
                 result = await apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ name, email, password }) });
                 if (!result) return showAuthError('Could not create account. The email may already be registered.');
             } else {
@@ -1351,15 +1357,26 @@
             }).join('');
         }
 
+        function esc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         function renderProductCardHTML(p) {
             const isWish = wishlist.some(item => item.id === p.id);
             const outOfStock = p.stock !== undefined && p.stock <= 0;
             const lowStock = !outOfStock && p.stock !== undefined && p.stock < 5;
+            const imgSrc = esc(p.image);
+            const nameSafe = esc(p.name);
             return `
                 <div class="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm hover:shadow-md transition-all group flex flex-col justify-between">
                     <div class="relative overflow-hidden bg-gray-100 h-48">
-                        <img src="${p.image}" alt="${p.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" onerror="this.src='https://placehold.co/400x300/4f46e5/ffffff?text=SwiftBuy'">
-                        ${p.badge ? `<span class="absolute top-3 left-3 bg-indigo-600 text-white text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full shadow-sm">${p.badge}</span>` : ''}
+                        <img src="${imgSrc}" alt="${nameSafe}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" onerror="this.src='https://placehold.co/400x300/4f46e5/ffffff?text=SwiftBuy'">
+                        ${p.badge ? `<span class="absolute top-3 left-3 bg-indigo-600 text-white text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full shadow-sm">${esc(p.badge)}</span>` : ''}
                         <button onclick="toggleWishlist(${p.id})" class="absolute top-3 right-3 w-8 h-8 bg-white/90 rounded-full flex items-center justify-center text-gray-500 hover:text-rose-500 shadow-sm transition-colors">
                             <i class="fa-${isWish ? 'solid text-rose-500' : 'regular'} fa-heart text-xs"></i>
                         </button>
@@ -1367,18 +1384,18 @@
 
                     <div class="p-4 flex-1 flex flex-col justify-between space-y-3">
                         <div>
-                            <span class="text-[10px] uppercase font-bold text-gray-400 block">${p.category}</span>
-                            <h3 class="font-bold text-xs text-gray-900 line-clamp-2 mt-0.5 group-hover:text-indigo-600 transition-colors">${p.name}</h3>
+                            <span class="text-[10px] uppercase font-bold text-gray-400 block">${esc(p.category)}</span>
+                            <h3 class="font-bold text-xs text-gray-900 line-clamp-2 mt-0.5 group-hover:text-indigo-600 transition-colors">${nameSafe}</h3>
                             <div class="flex items-center gap-1 text-amber-400 text-[10px] mt-1">
                                 <i class="fa-solid fa-star"></i>
-                                <span class="font-bold text-gray-700">${p.rating || '4.8'}</span>
-                                <span class="text-gray-400">(${p.reviews || 42})</span>
+                                <span class="font-bold text-gray-700">${esc(p.rating || '4.8')}</span>
+                                <span class="text-gray-400">(${esc(p.reviews || 42)})</span>
                             </div>
                         </div>
 
                         <div>
                             <div class="flex items-center gap-2 mb-1">
-                                ${lowStock ? `<span class="bg-amber-100 text-amber-700 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase">Only ${p.stock} left</span>` : ''}
+                                ${lowStock ? `<span class="bg-amber-100 text-amber-700 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase">Only ${esc(p.stock)} left</span>` : ''}
                                 ${outOfStock ? `<span class="bg-gray-200 text-gray-500 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase">Out of Stock</span>` : ''}
                             </div>
                             <div class="flex items-baseline gap-2 mb-3">
@@ -1536,24 +1553,24 @@
             tableBody.innerHTML = list.map(p => `
                 <tr class="hover:bg-gray-50/80 transition-colors">
                     <td class="py-3 px-6 flex items-center gap-3">
-                        <img src="${p.image}" alt="${p.name}" class="w-10 h-10 rounded-lg object-cover shrink-0 border border-gray-100" onerror="this.src='https://placehold.co/100x100/4f46e5/ffffff?text=Product'">
+                        <img src="${esc(p.image)}" alt="${esc(p.name)}" class="w-10 h-10 rounded-lg object-cover shrink-0 border border-gray-100" onerror="this.src='https://placehold.co/100x100/4f46e5/ffffff?text=Product'">
                         <div class="min-w-0">
-                            <span class="font-bold text-gray-900 block truncate max-w-xs">${p.name}</span>
-                            <span class="text-[10px] text-gray-400">ID: #${p.id}</span>
+                            <span class="font-bold text-gray-900 block truncate max-w-xs">${esc(p.name)}</span>
+                            <span class="text-[10px] text-gray-400">ID: #${esc(p.id)}</span>
                         </div>
                     </td>
-                    <td class="py-3 px-6 font-semibold text-gray-700">${p.category}</td>
+                    <td class="py-3 px-6 font-semibold text-gray-700">${esc(p.category)}</td>
                     <td class="py-3 px-6 font-black text-indigo-600">${formatCurrency(p.price)}</td>
                     <td class="py-3 px-6">
                         ${(p.stock !== undefined && p.stock <= 0)
                             ? '<span class="bg-gray-200 text-gray-500 font-bold text-[10px] px-2.5 py-0.5 rounded-full">Out of Stock</span>'
-                            : `<span class="font-bold text-gray-900">${(p.stock === undefined || p.stock === null) ? '10+' : p.stock}</span>
+                            : `<span class="font-bold text-gray-900">${(p.stock === undefined || p.stock === null) ? '10+' : esc(p.stock)}</span>
                                ${(p.stock !== undefined && p.stock < 5) ? '<span class="ml-1 text-amber-600 text-[10px] font-bold">Low</span>' : ''}`
                         }
                     </td>
                     <td class="py-3 px-6">
                         <span class="inline-block bg-indigo-50 text-indigo-700 font-extrabold text-[10px] px-2.5 py-0.5 rounded-full border border-indigo-100">
-                            ${p.badge || 'Standard'}
+                            ${esc(p.badge || 'Standard')}
                         </span>
                     </td>
                     <td class="py-3 px-6">
@@ -1784,9 +1801,9 @@
             } else {
                 container.innerHTML = cart.map(item => `
                     <div class="flex gap-3 bg-gray-50 p-3 rounded-2xl border border-gray-100 items-center">
-                        <img src="${item.image}" alt="${item.name}" class="w-14 h-14 rounded-xl object-cover shrink-0">
+                        <img src="${esc(item.image)}" alt="${esc(item.name)}" class="w-14 h-14 rounded-xl object-cover shrink-0">
                         <div class="flex-1 min-w-0">
-                            <h4 class="text-xs font-bold text-gray-900 truncate">${item.name}</h4>
+                            <h4 class="text-xs font-bold text-gray-900 truncate">${esc(item.name)}</h4>
                             <p class="text-xs font-black text-indigo-600 mt-0.5">${formatCurrency(item.price)}</p>
                         </div>
                         <div class="flex items-center gap-2 bg-white px-2 py-1 rounded-lg border border-gray-200 text-xs font-bold">
@@ -1842,12 +1859,12 @@
             const container = document.getElementById('quickview-content');
             container.innerHTML = `
                 <div class="rounded-2xl overflow-hidden h-64 sm:h-auto bg-gray-100">
-                    <img src="${p.image}" alt="${p.name}" class="w-full h-full object-cover">
+                    <img src="${esc(p.image)}" alt="${esc(p.name)}" class="w-full h-full object-cover">
                 </div>
                 <div class="space-y-4 text-xs">
-                    <span class="bg-indigo-50 text-indigo-600 font-bold px-2.5 py-1 rounded-full uppercase text-[10px]">${p.category}</span>
-                    <h3 class="text-lg font-black text-gray-900">${p.name}</h3>
-                    <p class="text-gray-500 leading-relaxed">${p.description || "Quality product available for express delivery."}</p>
+                    <span class="bg-indigo-50 text-indigo-600 font-bold px-2.5 py-1 rounded-full uppercase text-[10px]">${esc(p.category)}</span>
+                    <h3 class="text-lg font-black text-gray-900">${esc(p.name)}</h3>
+                    <p class="text-gray-500 leading-relaxed">${esc(p.description || "Quality product available for express delivery.")}</p>
                     <div class="flex items-baseline gap-2">
                         <span class="text-2xl font-black text-indigo-600">${formatCurrency(p.price)}</span>
                         ${p.oldPrice ? `<span class="text-xs text-gray-400 line-through">${formatCurrency(p.oldPrice)}</span>` : ''}
@@ -1904,7 +1921,7 @@
             }
             container.innerHTML = cart.map(i => `
                 <div class="flex justify-between items-center gap-2 text-[11px]">
-                    <span class="truncate font-semibold text-gray-700">${i.qty} x ${i.name}</span>
+                    <span class="truncate font-semibold text-gray-700">${esc(i.qty)} x ${esc(i.name)}</span>
                     <span class="font-bold text-gray-900 shrink-0">${formatCurrency(i.price * i.qty)}</span>
                 </div>
             `).join('');
@@ -2069,8 +2086,8 @@
                 return `
                     <div class="relative">
                         <span class="absolute -left-[31px] top-0 w-4 h-4 rounded-full ${done ? 'bg-indigo-600 ring-4 ring-indigo-100' : 'bg-gray-300'}"></span>
-                        <h4 class="text-xs font-bold ${done ? 'text-gray-900' : 'text-gray-400'}">${s.label}</h4>
-                        <p class="text-[11px] ${done ? 'text-gray-500' : 'text-gray-400'}">${s.time || ''}</p>
+                        <h4 class="text-xs font-bold ${done ? 'text-gray-900' : 'text-gray-400'}">${esc(s.label)}</h4>
+                        <p class="text-[11px] ${done ? 'text-gray-500' : 'text-gray-400'}">${esc(s.time || '')}</p>
                     </div>
                 `;
             }).join('');
@@ -2105,26 +2122,27 @@
 
             tableBody.innerHTML = orders.map(o => {
                 const status = o.status || 'processing';
-                const itemNames = (o.items || []).map(i => i.name).join(', ');
+                const itemNames = (o.items || []).map(i => esc(i.name)).join(', ');
                 const placed = new Date(o.createdAt).toLocaleString();
+                const orderId = String(o.id).toUpperCase();
                 return `
                     <tr class="hover:bg-gray-50/80 transition-colors">
-                        <td class="py-3 px-6 font-black text-indigo-600">${String(o.id).toUpperCase()}</td>
+                        <td class="py-3 px-6 font-black text-indigo-600">${esc(orderId)}</td>
                         <td class="py-3 px-6">
-                            <span class="font-bold text-gray-900 block">${(o.customer && o.customer.name) || '-'}</span>
-                            <span class="text-[10px] text-gray-400">${(o.customer && o.customer.phone) || ''}</span>
+                            <span class="font-bold text-gray-900 block">${esc((o.customer && o.customer.name) || '-')}</span>
+                            <span class="text-[10px] text-gray-400">${esc((o.customer && o.customer.phone) || '')}</span>
                         </td>
-                        <td class="py-3 px-6 font-semibold text-gray-700 max-w-[220px] truncate" title="${itemNames}">${itemNames || '-'}</td>
+                        <td class="py-3 px-6 font-semibold text-gray-700 max-w-[220px] truncate" title="${esc(itemNames)}">${itemNames || '-'}</td>
                         <td class="py-3 px-6 font-black text-gray-900">${formatCurrency(o.total || 0)}</td>
                         <td class="py-3 px-6">
-                            <select onchange="updateOrderStatus('${String(o.id).toUpperCase()}', this.value)" class="bg-white border border-gray-200 rounded-lg text-[10px] font-bold px-2 py-1 outline-none text-gray-700">
+                            <select onchange="updateOrderStatus('${esc(orderId)}', this.value)" class="bg-white border border-gray-200 rounded-lg text-[10px] font-bold px-2 py-1 outline-none text-gray-700">
                                 <option value="processing" ${status === 'processing' ? 'selected' : ''}>Order Confirmed</option>
                                 <option value="packed" ${status === 'packed' ? 'selected' : ''}>Packed</option>
                                 <option value="shipped" ${status === 'shipped' ? 'selected' : ''}>On The Way</option>
                                 <option value="delivered" ${status === 'delivered' ? 'selected' : ''}>Delivered</option>
                             </select>
                         </td>
-                        <td class="py-3 px-6 text-gray-400 text-[10px]">${placed}</td>
+                        <td class="py-3 px-6 text-gray-400 text-[10px]">${esc(placed)}</td>
                     </tr>
                 `;
             }).join('');
@@ -2163,8 +2181,8 @@
             el.innerHTML = s.topProducts.map((t, i) => `
                 <div class="flex items-center gap-4 px-6 py-3">
                     <span class="w-6 h-6 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center text-[10px] font-black shrink-0">${i + 1}</span>
-                    <span class="flex-1 font-semibold text-gray-800 text-xs truncate">${t.name}</span>
-                    <span class="text-[10px] text-gray-400 font-bold shrink-0">${t.qty} sold</span>
+                    <span class="flex-1 font-semibold text-gray-800 text-xs truncate">${esc(t.name)}</span>
+                    <span class="text-[10px] text-gray-400 font-bold shrink-0">${esc(t.qty)} sold</span>
                     <span class="font-black text-indigo-600 text-xs shrink-0">${formatCurrency(t.revenue)}</span>
                 </div>
             `).join('');
@@ -2185,8 +2203,8 @@
             }
             container.innerHTML = data.map(c => `
                 <div class="flex items-center gap-4 px-6 py-3">
-                    <span class="font-black text-indigo-600 uppercase text-xs w-32 truncate">${c.code}</span>
-                    <span class="text-xs text-gray-600 font-bold w-16">${c.percent}% off</span>
+                    <span class="font-black text-indigo-600 uppercase text-xs w-32 truncate">${esc(c.code)}</span>
+                    <span class="text-xs text-gray-600 font-bold w-16">${esc(c.percent)}% off</span>
                     <button onclick="toggleCoupon(${c.id})" class="text-[10px] font-bold px-3 py-1 rounded-full ${c.active ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-500'}">${c.active ? 'Active' : 'Disabled'}</button>
                     <button onclick="deleteCoupon(${c.id})" class="ml-auto text-gray-400 hover:text-rose-600 transition-colors" title="Delete Coupon"><i class="fa-solid fa-trash-can"></i></button>
                 </div>
@@ -2267,6 +2285,14 @@
                 const el = document.getElementById('flash-sale-container');
                 if (el) el.scrollIntoView({ behavior: 'smooth' });
                 return;
+            }
+            if (viewName === 'admin') {
+                const allowed = currentUser && currentUser.role === 'admin';
+                if (!allowed) {
+                    showToast('Admin access required. Please sign in with an admin account.');
+                    openAuthModal();
+                    return;
+                }
             }
             document.querySelectorAll('.view-section').forEach(el => el.classList.add('hidden'));
             const target = document.getElementById(`view-${viewName}`);
