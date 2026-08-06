@@ -270,7 +270,13 @@ function nextId(list) {
 }
 
 function generateOrderCode() {
-    return 'SB-' + crypto.randomBytes(6).toString('hex').toUpperCase();
+    // Kenyan number plate format: K + 2 letters + 3 digits + 1 letter, e.g. KDA123A
+    const rand = (n) => Array.from({ length: n }, () => String.fromCharCode(65 + Math.floor(Math.random() * 26))).join('');
+    for (let attempt = 0; attempt < 50; attempt++) {
+        const code = 'K' + rand(2) + String(Math.floor(Math.random() * 1000)).padStart(3, '0') + rand(1);
+        if (!db.orders.some(o => String(o.id).toUpperCase() === code)) return code;
+    }
+    return 'K' + rand(2) + String(Date.now() % 1000).padStart(3, '0') + rand(1);
 }
 
 function maskPhone(phone) {

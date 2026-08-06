@@ -432,11 +432,11 @@
                 </div>
                 <div>
                     <h2 class="text-2xl font-black text-gray-900">Track Your SwiftBuy Order</h2>
-                    <p class="text-xs text-gray-500 mt-1">Enter your Order ID (e.g., SB-98421) to get live tracking updates.</p>
+                    <p class="text-xs text-gray-500 mt-1">Enter your Order ID (e.g., KDA123A) to get live tracking updates.</p>
                 </div>
 
                 <div class="flex max-w-md mx-auto gap-2">
-                    <input type="text" id="track-input" placeholder="e.g. SB-98421" value="SB-98421" class="flex-1 px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:border-indigo-600">
+                    <input type="text" id="track-input" placeholder="e.g. KDA123A" value="" class="flex-1 px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:border-indigo-600">
                     <button onclick="trackOrder()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-6 py-2.5 rounded-xl text-sm transition-colors">Track</button>
                 </div>
 
@@ -444,7 +444,7 @@
                     <div class="flex justify-between items-center bg-gray-50 p-4 rounded-xl">
                         <div>
                             <span class="text-[10px] uppercase font-bold text-gray-400 block">Order Reference</span>
-                            <span class="font-black text-gray-900 text-base" id="track-id-disp">SB-98421</span>
+                            <span class="font-black text-gray-900 text-base" id="track-id-disp">KDA123A</span>
                         </div>
                         <span id="track-status" class="bg-emerald-100 text-emerald-700 text-xs font-bold px-3 py-1 rounded-full">Track</span>
                     </div>
@@ -2011,8 +2011,9 @@
             }
             if (!order) {
                 const totals = getCartTotals();
+                const rand = (n) => Array.from({ length: n }, () => String.fromCharCode(65 + Math.floor(Math.random() * 26))).join('');
                 order = {
-                    id: 'SB-' + Math.floor(100000 + Math.random() * 900000),
+                    id: 'K' + rand(2) + String(Math.floor(Math.random() * 1000)).padStart(3, '0') + rand(1),
                     customer: { name, phone, address },
                     payment,
                     items,
