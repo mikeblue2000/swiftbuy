@@ -819,6 +819,6 @@ const server = http.createServer(async (req, res) => {
 loadDb();
 
 server.listen(PORT, '0.0.0.0', () => {
-     console.log('SwiftBuy server running at http://0.0.0.0:' + PORT);
+     console.log('Abumira server running at http://0.0.0.0:' + PORT);
     console.log('Products: ' + db.products.length + ' | Users: ' + db.users.length + ' | Coupons: ' + db.coupons.length);
 });

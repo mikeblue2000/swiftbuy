@@ -1,7 +1,7 @@
 {
   "name": "swiftbuy",
   "version": "1.0.0",
-  "description": "SwiftBuy online shopping marketplace - local server",
+  "description": "Abumira online shopping marketplace - local server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
