@@ -1,0 +1,8 @@
+[build]
+  builder = "NIXPACKS"
+
+[install]
+  command = "npm install"
+
+[deploy]
+  start = "node server.js"
