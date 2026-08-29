@@ -1,0 +1,131 @@
+{
+  "products": [
+    {
+      "id": 1,
+      "name": "Aura Pro Wireless Headphones",
+      "category": "Electronics",
+      "price": 12999,
+      "oldPrice": 19999,
+      "rating": 4.8,
+      "reviews": 342,
+      "image": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=600&q=80",
+      "flashSale": true,
+      "badge": "Flash Sale",
+      "stock": 42,
+      "description": "Active noise cancelling with 40-hour battery life and spatial audio immersion."
+    },
+    {
+      "id": 2,
+      "name": "Ultra-Light Performance Running Shoes",
+      "category": "Fashion",
+      "price": 8450,
+      "oldPrice": 12000,
+      "rating": 4.6,
+      "reviews": 189,
+      "image": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=600&q=80",
+      "flashSale": true,
+      "badge": "Best Seller",
+      "stock": 27,
+      "description": "Breathable mesh upper with high-rebound cushioning for maximum comfort."
+    },
+    {
+      "id": 3,
+      "name": "Smart Watch Series X - OLED Display",
+      "category": "Electronics",
+      "price": 24900,
+      "oldPrice": 29900,
+      "rating": 4.9,
+      "reviews": 512,
+      "image": "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=600&q=80",
+      "flashSale": false,
+      "badge": "Trending",
+      "stock": 15,
+      "description": "Comprehensive health monitoring, GPS tracking, and seamless smartphone sync."
+    },
+    {
+      "id": 4,
+      "name": "Ergonomic Mechanical RGB Gaming Keyboard",
+      "category": "Gaming",
+      "price": 7999,
+      "oldPrice": 10999,
+      "rating": 4.7,
+      "reviews": 210,
+      "image": "https://images.unsplash.com/photo-1587829741301-dc798b83add3?auto=format&fit=crop&w=600&q=80",
+      "flashSale": true,
+      "badge": "Flash Sale",
+      "stock": 33,
+      "description": "Customizable hot-swappable tactile switches with customizable backlight profiles."
+    },
+    {
+      "id": 5,
+      "name": "Minimalist Top-Grain Leather Chronograph",
+      "category": "Fashion",
+      "price": 15900,
+      "oldPrice": 21000,
+      "rating": 4.8,
+      "reviews": 95,
+      "image": "https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=600&q=80",
+      "flashSale": false,
+      "badge": "Premium",
+      "stock": 12,
+      "description": "Water-resistant stainless steel watch with genuine top-grain calfskin leather strap."
+    },
+    {
+      "id": 6,
+      "name": "Precision Espresso & Coffee Machine",
+      "category": "Home & Kitchen",
+      "price": 18999,
+      "oldPrice": 24000,
+      "rating": 4.9,
+      "reviews": 142,
+      "image": "https://images.unsplash.com/photo-1517668808822-9ed02810a01d?auto=format&fit=crop&w=600&q=80",
+      "flashSale": true,
+      "badge": "Hot Item",
+      "stock": 18,
+      "description": "15-bar Italian pump pressure with built-in milk frother for barista quality at home."
+    },
+    {
+      "id": 7,
+      "name": "Hydrating Organic Glow Face Serum",
+      "category": "Beauty & Cosmetics",
+      "price": 3400,
+      "oldPrice": 4800,
+      "rating": 4.5,
+      "reviews": 88,
+      "image": "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?auto=format&fit=crop&w=600&q=80",
+      "flashSale": false,
+      "badge": "Organic",
+      "stock": 64,
+      "description": "Infused with Hyaluronic Acid and Vitamin C for natural radiant skincare."
+    },
+    {
+      "id": 8,
+      "name": "Wireless Ergonomic Precision Mouse",
+      "category": "Gaming",
+      "price": 4999,
+      "oldPrice": 6999,
+      "rating": 4.6,
+      "reviews": 175,
+      "image": "https://images.unsplash.com/photo-1615663245857-ac93bb7c39e7?auto=format&fit=crop&w=600&q=80",
+      "flashSale": false,
+      "badge": "New Arrival",
+      "stock": 51,
+      "description": "Ultra-fast wireless sensor with 20,000 DPI and programmable side buttons."
+    }
+  ],
+  "orders": [],
+  "users": [
+    {
+      "id": 1,
+      "name": "SwiftBuy Admin",
+      "email": "admin@swiftbuy.local",
+      "salt": "3a92ded4bebc49bcc35e0e4a5eca453e",
+      "passwordHash": "cb9f115d0139248234312ad847211f35f308a745255789561cdf335ca803574346ffc114d0814e5ce61f2a98f3a52af3674e02126b4016e027d4788dcd6f526d",
+      "role": "admin",
+      "createdAt": 1786020774810
+    }
+  ],
+  "coupons": [],
+  "newsletter": [],
+  "messages": []
+}
