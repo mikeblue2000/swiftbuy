@@ -818,7 +818,7 @@ const server = http.createServer(async (req, res) => {
 
 loadDb();
 
-server.listen(PORT, () => {
-    console.log('SwiftBuy server running at http://localhost:' + PORT);
+server.listen(PORT, '0.0.0.0', () => {
+     console.log('SwiftBuy server running at http://0.0.0.0:' + PORT);
     console.log('Products: ' + db.products.length + ' | Users: ' + db.users.length + ' | Coupons: ' + db.coupons.length);
 });
