@@ -1,4 +1,5 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -14,7 +15,17 @@ const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@swiftbuy.local').toLowerC
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@2026';
 const rateHits = {};
 
-let db = { users: [], sellers: [], products: [], categories: [], orders: [], orderItems: [], cart: [], reviews: [], coupons: [], newsletter: [], messages: [] };
+const MPESA_CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY || '';
+const MPESA_CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET || '';
+const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE || '174379';
+const MPESA_PASSKEY = process.env.MPESA_PASSKEY || '';
+const MPESA_CALLBACK_URL = process.env.MPESA_CALLBACK_URL || '';
+const MPESA_ENV = process.env.MPESA_ENV || 'sandbox';
+const MPESA_BASE_URL = MPESA_ENV === 'production' ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke';
+let mpesaAccessToken = '';
+let mpesaTokenExpiry = 0;
+
+let db = { users: [], sellers: [], products: [], categories: [], orders: [], orderItems: [], cart: [], reviews: [], coupons: [], newsletter: [], messages: [], payments: [] };
 const sessions = {};
 
 function rateLimit(key, max, windowMs) {
@@ -53,6 +64,7 @@ function loadDb() {
     if (!Array.isArray(db.coupons)) db.coupons = [];
     if (!Array.isArray(db.newsletter)) db.newsletter = [];
     if (!Array.isArray(db.messages)) db.messages = [];
+    if (!Array.isArray(db.payments)) db.payments = [];
     if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
     if (!db.users.some(u => u.role === 'admin')) {
         const salt = crypto.randomBytes(16).toString('hex');
@@ -62,7 +74,7 @@ function loadDb() {
     saveDb();
 }
 function seedDb() {
-    return { users: [], sellers: [], products: [], categories: seedCategories(), orders: [], orderItems: [], cart: [], reviews: [], coupons: [], newsletter: [], messages: [] };
+    return { users: [], sellers: [], products: [], categories: seedCategories(), orders: [], orderItems: [], cart: [], reviews: [], coupons: [], newsletter: [], messages: [], payments: [] };
 }
 function seedCategories() {
     return [
@@ -79,10 +91,6 @@ function seedCategories() {
     ];
 }
 function fmtTime(ms) { try { return new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (e) { return new Date(ms).toISOString(); } }
-function maskPhone(p) { p = String(p || ''); return p.length <= 4 ? p : p.slice(0, 4) + '****' + p.slice(-2); }
-function maskName(n) { n = String(n || ''); const parts = n.trim().split(/\s+/); return parts.length === 0 ? '' : parts[0] + (parts.length > 1 ? ' ' + parts[1].charAt(0) + '.' : ''); }
-const HOUR = 3600000;
-const STATUS_ORDER = ['processing', 'packed', 'shipped', 'delivered'];
 function effectiveStatus(order) {
     if (order.status && STATUS_ORDER.includes(order.status)) return order.status;
     const elapsed = Date.now() - order.createdAt;
@@ -388,13 +396,121 @@ const server = http.createServer(async (req, res) => {
         }
         const subtotal = verified.reduce((s, i) => s + i.price * i.qty, 0);
         const orderId = 'ORD' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(2).toString('hex').toUpperCase();
-        const order = { id: orderId, userId: user.id, items: verified, subtotal, total: subtotal, status: 'pending', address: sanitize(body.address || ''), phone: sanitize(body.phone || ''), createdAt: Date.now() };
+        const phone = sanitize(body.phone || '');
+        const order = { id: orderId, userId: user.id, items: verified, subtotal, total: subtotal, status: 'pending_payment', paymentStatus: 'pending', address: sanitize(body.address || ''), phone, createdAt: Date.now() };
         db.orders.push(order);
         const orderItems = verified.map(item => ({ id: nextId(db.orderItems), orderId: order.id, productId: item.productId, sellerId: item.sellerId, userId: user.id, quantity: item.qty, price: item.price, createdAt: Date.now() }));
         db.orderItems.push(...orderItems);
         db.cart = db.cart.filter(c => c.userId !== user.id);
         saveDb();
-        return sendJson(res, 201, order);
+        let stkResult = null;
+        let paymentInitiated = false;
+        if (MPESA_CONSUMER_KEY && MPESA_CONSUMER_SECRET && phone) {
+            try {
+                stkResult = await initiateStkPush(phone, subtotal, orderId, orderId);
+                if (stkResult && stkResult.ResponseCode === '0') {
+                    paymentInitiated = true;
+                    order.paymentStatus = 'processing';
+                    order.stkRequestID = stkResult.MerchantRequestID;
+                    order.stkCheckoutRequestID = stkResult.CheckoutRequestID;
+                    const payment = { id: nextId(db.payments), orderId, userId: user.id, amount: subtotal, phone: maskPhone(phone), method: 'M-Pesa', status: 'processing', stkRequestID: stkResult.MerchantRequestID, createdAt: Date.now() };
+                    db.payments.push(payment);
+                    saveDb();
+                }
+            } catch (e) {
+                console.log('STK push failed:', e.message);
+                order.paymentStatus = 'pending';
+            }
+        }
+        return sendJson(res, 201, { order, paymentInitiated, stkMessage: paymentInitiated ? 'Check your phone for the M-Pesa payment prompt' : (MPESA_CONSUMER_KEY ? 'Payment prompt failed. Please retry.' : 'Payment not configured. Contact admin.') });
+    }
+
+    // PAYMENT CALLBACK (M-Pesa STK push result)
+    if (pathname === '/api/pay/callback' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        await new Promise(r => req.on('end', r));
+        let callbackData;
+        try { callbackData = JSON.parse(body); } catch (e) { return sendJson(res, 200, { ResultCode: 0, ResultDesc: 'OK' }); }
+        const stkCallback = callbackData.Body && callbackData.Body.stkCallback;
+        if (!stkCallback) return sendJson(res, 200, { ResultCode: 0, ResultDesc: 'OK' });
+        const merchantRequestID = stkCallback.MerchantRequestID;
+        const resultCode = stkCallback.ResultCode;
+        const resultDesc = stkCallback.ResultDesc || '';
+        const payment = db.payments.find(p => p.stkRequestID === merchantRequestID);
+        if (payment) {
+            payment.status = resultCode === 0 ? 'completed' : 'failed';
+            payment.resultCode = resultCode;
+            payment.resultDesc = resultDesc;
+            payment.completedAt = Date.now();
+            const order = db.orders.find(o => o.id === payment.orderId);
+            if (order) {
+                if (resultCode === 0) {
+                    order.status = 'confirmed';
+                    order.paymentStatus = 'confirmed';
+                    order.paidAt = Date.now();
+                    order.paymentMethod = 'M-Pesa';
+                } else {
+                    order.status = 'payment_failed';
+                    order.paymentStatus = 'failed';
+                    order.paymentError = resultDesc;
+                    for (const item of order.items) {
+                        const prod = db.products.find(p => Number(p.id) === Number(item.productId));
+                        if (prod) prod.stock = (prod.stock || 0) + item.qty;
+                    }
+                }
+            }
+            saveDb();
+        }
+        return sendJson(res, 200, { ResultCode: 0, ResultDesc: 'OK' });
+    }
+
+    // PAYMENT STATUS CHECK
+    if (pathname.match(/^\/api\/pay\/status\/([\w-]+)$/) && req.method === 'GET') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const orderId = pathname.match(/^\/api\/pay\/status\/([\w-]+)$/)[1];
+        const order = db.orders.find(o => o.id === orderId);
+        if (!order) return sendJson(res, 404, { error: 'Order not found' });
+        if (order.userId !== user.id && user.role !== 'admin') return sendJson(res, 403, { error: 'Access denied' });
+        const payment = db.payments.find(p => p.orderId === orderId);
+        return sendJson(res, 200, { orderId: order.id, status: order.status, paymentStatus: order.paymentStatus, paymentError: order.paymentError || null, paidAt: order.paidAt || null, payment: payment || null });
+    }
+
+    // PAYMENT RETRY
+    if (pathname.match(/^\/api\/pay\/retry\/([\w-]+)$/) && req.method === 'POST') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const orderId = pathname.match(/^\/api\/pay\/retry\/([\w-]+)$/)[1];
+        const order = db.orders.find(o => o.id === orderId);
+        if (!order) return sendJson(res, 404, { error: 'Order not found' });
+        if (order.userId !== user.id) return sendJson(res, 403, { error: 'Access denied' });
+        if (order.paymentStatus !== 'failed' && order.status !== 'payment_failed') return sendJson(res, 400, { error: 'Order does not need payment retry' });
+        if (!order.phone) return sendJson(res, 400, { error: 'No phone number on this order' });
+        order.status = 'pending_payment';
+        order.paymentStatus = 'pending';
+        delete order.paymentError;
+        try {
+            const stkResult = await initiateStkPush(order.phone, order.total, order.id, order.id);
+            if (stkResult && stkResult.ResponseCode === '0') {
+                order.paymentStatus = 'processing';
+                order.stkRequestID = stkResult.MerchantRequestID;
+                order.stkCheckoutRequestID = stkResult.CheckoutRequestID;
+                const payment = { id: nextId(db.payments), orderId: order.id, userId: user.id, amount: order.total, phone: maskPhone(order.phone), method: 'M-Pesa', status: 'processing', stkRequestID: stkResult.MerchantRequestID, createdAt: Date.now() };
+                db.payments.push(payment);
+                saveDb();
+                return sendJson(res, 200, { ok: true, message: 'Check your phone for the M-Pesa payment prompt' });
+            }
+            saveDb();
+            return sendJson(res, 500, { error: 'Failed to initiate payment. Please try again.' });
+        } catch (e) {
+            saveDb();
+            return sendJson(res, 500, { error: 'Payment service unavailable. Please try again later.' });
+        }
+    }
+
+    // ADMIN - Payments list
+    if (pathname === '/api/admin/payments' && req.method === 'GET') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
+        return sendJson(res, 200, db.payments.slice().reverse());
     }
 
     // ORDERS
@@ -563,5 +679,64 @@ const server = http.createServer(async (req, res) => {
 function sendText(res, code, text) { res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(text); }
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.webp': 'image/webp', '.txt': 'text/plain; charset=utf-8' };
 
-loadDb();
+function httpsRequest(url, options, body) {
+    return new Promise((resolve, reject) => {
+        const urlObj = new URL(url);
+        const reqOptions = { hostname: urlObj.hostname, port: urlObj.port || 443, path: urlObj.pathname + urlObj.search, method: options.method || 'POST', headers: options.headers || {} };
+        const req = https.request(reqOptions, res => { let data = ''; res.on('data', chunk => data += chunk); res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(data) }); } catch (e) { resolve({ status: res.statusCode, data }); } }); });
+        req.on('error', reject);
+        if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+        req.end();
+    });
+}
+
+async function getMpesaToken() {
+    if (mpesaAccessToken && Date.now() < mpesaTokenExpiry) return mpesaAccessToken;
+    if (!MPESA_CONSUMER_KEY || !MPESA_CONSUMER_SECRET) throw new Error('M-Pesa credentials not configured');
+    const auth = Buffer.from(MPESA_CONSUMER_KEY + ':' + MPESA_CONSUMER_SECRET).toString('base64');
+    const res = await httpsRequest(MPESA_BASE_URL + '/oauth/v1/generate?grant_type=client_credentials', { method: 'GET', headers: { 'Authorization': 'Basic ' + auth } });
+    if (res.data && res.data.access_token) {
+        mpesaAccessToken = res.data.access_token;
+        mpesaTokenExpiry = Date.now() + ((res.data.expires_in || 3599) * 1000) - 60000;
+        return mpesaAccessToken;
+    }
+    throw new Error('Failed to get M-Pesa token');
+}
+
+function generateMpesaPassword() {
+    const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, '').substring(0, 14);
+    const data = MPESA_SHORTCODE + MPESA_PASSKEY + timestamp;
+    return { password: Buffer.from(data).toString('base64'), timestamp };
+}
+
+async function initiateStkPush(phoneNumber, amount, orderId, accountRef) {
+    const token = await getMpesaToken();
+    const { password, timestamp } = generateMpesaPassword();
+    const phone = phoneNumber.replace(/^0/, '254').replace(/^\+?254/, '254');
+    const body = {
+        BusinessShortCode: MPESA_SHORTCODE,
+        Password: password,
+        Timestamp: timestamp,
+        TransactionType: 'CustomerBuyGoodsOnline',
+        Amount: Math.round(amount),
+        PartyA: phone,
+        PartyB: MPESA_SHORTCODE,
+        PhoneNumber: phone,
+        CallBackURL: MPESA_CALLBACK_URL || 'https://httpbin.org/post',
+        AccountReference: accountRef || orderId,
+        TransactionDesc: 'Payment for order ' + orderId
+    };
+    const res = await httpsRequest(MPESA_BASE_URL + '/mpesa/stkpush/v1/processrequest', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+    }, body);
+    return res.data;
+}
+
+function maskPhone(p) { p = String(p || ''); return p.length <= 4 ? p : p.slice(0, 4) + '****' + p.slice(-2); }
+function maskName(n) { n = String(n || ''); const parts = n.trim().split(/\s+/); return parts.length === 0 ? '' : parts[0] + (parts.length > 1 ? ' ' + parts[1].charAt(0) + '.' : ''); }
+const HOUR = 3600000;
+const STATUS_ORDER = ['processing', 'packed', 'shipped', 'delivered'];
+const PAYMENT_STATUSES = ['pending_payment', 'processing_payment', 'confirmed', 'payment_failed', 'cancelled', 'refunded'];
+const STATUS_ORDER_PAYMENT = ['processing', 'packed', 'shipped', 'delivered'];
 server.listen(PORT, '0.0.0.0', () => { console.log('Abumira marketplace server running at http://0.0.0.0:' + PORT); });
