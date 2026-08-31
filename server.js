@@ -2,314 +2,87 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { URL } = require('url');
 
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
 const DATA_FILE = path.join(ROOT, 'data.json');
 const UPLOAD_DIR = path.join(ROOT, 'uploads');
 
-const seedProducts = [
-    {
-        id: 1,
-        name: "Aura Pro Wireless Headphones",
-        category: "Electronics",
-        price: 12999,
-        oldPrice: 19999,
-        rating: 4.8,
-        reviews: 342,
-        image: "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=600&q=80",
-        flashSale: true,
-        badge: "Flash Sale",
-        stock: 42,
-        description: "Active noise cancelling with 40-hour battery life and spatial audio immersion."
-    },
-    {
-        id: 2,
-        name: "Ultra-Light Performance Running Shoes",
-        category: "Fashion",
-        price: 8450,
-        oldPrice: 12000,
-        rating: 4.6,
-        reviews: 189,
-        image: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=600&q=80",
-        flashSale: true,
-        badge: "Best Seller",
-        stock: 27,
-        description: "Breathable mesh upper with high-rebound cushioning for maximum comfort."
-    },
-    {
-        id: 3,
-        name: "Smart Watch Series X - OLED Display",
-        category: "Electronics",
-        price: 24900,
-        oldPrice: 29900,
-        rating: 4.9,
-        reviews: 512,
-        image: "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=600&q=80",
-        flashSale: false,
-        badge: "Trending",
-        stock: 15,
-        description: "Comprehensive health monitoring, GPS tracking, and seamless smartphone sync."
-    },
-    {
-        id: 4,
-        name: "Ergonomic Mechanical RGB Gaming Keyboard",
-        category: "Gaming",
-        price: 7999,
-        oldPrice: 10999,
-        rating: 4.7,
-        reviews: 210,
-        image: "https://images.unsplash.com/photo-1587829741301-dc798b83add3?auto=format&fit=crop&w=600&q=80",
-        flashSale: true,
-        badge: "Flash Sale",
-        stock: 33,
-        description: "Customizable hot-swappable tactile switches with customizable backlight profiles."
-    },
-    {
-        id: 5,
-        name: "Minimalist Top-Grain Leather Chronograph",
-        category: "Fashion",
-        price: 15900,
-        oldPrice: 21000,
-        rating: 4.8,
-        reviews: 95,
-        image: "https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=600&q=80",
-        flashSale: false,
-        badge: "Premium",
-        stock: 12,
-        description: "Water-resistant stainless steel watch with genuine top-grain calfskin leather strap."
-    },
-    {
-        id: 6,
-        name: "Precision Espresso & Coffee Machine",
-        category: "Home & Kitchen",
-        price: 18999,
-        oldPrice: 24000,
-        rating: 4.9,
-        reviews: 142,
-        image: "https://images.unsplash.com/photo-1517668808822-9ed02810a01d?auto=format&fit=crop&w=600&q=80",
-        flashSale: true,
-        badge: "Hot Item",
-        stock: 18,
-        description: "15-bar Italian pump pressure with built-in milk frother for barista quality at home."
-    },
-    {
-        id: 7,
-        name: "Hydrating Organic Glow Face Serum",
-        category: "Beauty & Cosmetics",
-        price: 3400,
-        oldPrice: 4800,
-        rating: 4.5,
-        reviews: 88,
-        image: "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?auto=format&fit=crop&w=600&q=80",
-        flashSale: false,
-        badge: "Organic",
-        stock: 64,
-        description: "Infused with Hyaluronic Acid and Vitamin C for natural radiant skincare."
-    },
-    {
-        id: 8,
-        name: "Wireless Ergonomic Precision Mouse",
-        category: "Gaming",
-        price: 4999,
-        oldPrice: 6999,
-        rating: 4.6,
-        reviews: 175,
-        image: "https://images.unsplash.com/photo-1615663245857-ac93bb7c39e7?auto=format&fit=crop&w=600&q=80",
-        flashSale: false,
-        badge: "New Arrival",
-        stock: 51,
-        description: "Ultra-fast wireless sensor with 20,000 DPI and programmable side buttons."
-    }
-];
-
-let db = { products: [], orders: [], users: [], coupons: [], newsletter: [], messages: [] };
-const sessions = {}; // token -> { userId, expiresAt }
-const SESSION_TTL = 7 * 24 * 3600000; // 7 days
+const SESSION_TTL = 7 * 24 * 3600000;
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@swiftbuy.local').toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@2026';
-const rateHits = {}; // key -> { count, resetAt }
+const rateHits = {};
+
+let db = { users: [], sellers: [], products: [], categories: [], orders: [], orderItems: [], cart: [], reviews: [], coupons: [], newsletter: [], messages: [] };
+const sessions = {};
 
 function rateLimit(key, max, windowMs) {
     const now = Date.now();
     let e = rateHits[key];
-    if (!e || e.resetAt <= now) {
-        e = { count: 0, resetAt: now + windowMs };
-        rateHits[key] = e;
-    }
+    if (!e || e.resetAt <= now) { e = { count: 0, resetAt: now + windowMs }; rateHits[key] = e; }
     e.count++;
     return e.count <= max;
 }
-
-function rateKey(req, label) {
-    return label + ':' + (req.socket.remoteAddress || 'unknown');
+function rateKey(req) { return (req.socket.remoteAddress || 'unknown') + ':' + Date.now(); }
+function nextId(list) { return list.reduce((m, i) => Math.max(m, Number(i.id) || 0), 0) + 1; }
+function hashPassword(password, salt) { return crypto.scryptSync(String(password), salt, 64).toString('hex'); }
+function createSession(userId) { const token = crypto.randomBytes(24).toString('hex'); sessions[token] = { userId, expiresAt: Date.now() + SESSION_TTL }; return token; }
+function authUser(req) {
+    const header = req.headers['authorization'] || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    const session = sessions[token];
+    if (!session || session.expiresAt <= Date.now()) { delete sessions[token]; return null; }
+    const user = db.users.find(u => u.id === session.userId) || null;
+    if (user && session.expiresAt - Date.now() < SESSION_TTL / 4) session.expiresAt = Date.now() + SESSION_TTL;
+    return user;
 }
-
-function cleanExpiredSessions() {
-    const now = Date.now();
-    for (const k of Object.keys(sessions)) {
-        if (sessions[k].expiresAt <= now) delete sessions[k];
-    }
-    for (const k of Object.keys(rateHits)) {
-        if (rateHits[k].resetAt <= now) delete rateHits[k];
-    }
-}
-setInterval(cleanExpiredSessions, 10 * 60000).unref();
-
+function authAdmin(req) { const u = authUser(req); return u && u.role === 'admin' ? u : null; }
+function authSeller(req) { const u = authUser(req); return u && (u.role === 'seller' || u.role === 'admin') ? u : null; }
+function saveDb() { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2)); }
 function loadDb() {
-    try {
-        const raw = fs.readFileSync(DATA_FILE, 'utf8');
-        db = JSON.parse(raw);
-    } catch (e) {
-        db = { products: JSON.parse(JSON.stringify(seedProducts)), orders: [], users: [], coupons: [], newsletter: [], messages: [] };
-        saveDb();
-    }
-    if (!Array.isArray(db.products) || db.products.length === 0) db.products = JSON.parse(JSON.stringify(seedProducts));
-    let changed = false;
-    db.products.forEach(p => {
-        if (p.stock === undefined || p.stock === null) { p.stock = 10; changed = true; }
-        if (typeof p.price !== 'number') { p.price = Number(p.price) || 0; changed = true; }
-    });
-    if (changed) saveDb();
-    if (!Array.isArray(db.orders)) db.orders = [];
+    try { const raw = fs.readFileSync(DATA_FILE, 'utf8'); db = JSON.parse(raw); } catch (e) { db = seedDb(); }
     if (!Array.isArray(db.users)) db.users = [];
+    if (!Array.isArray(db.sellers)) db.sellers = [];
+    if (!Array.isArray(db.products)) db.products = [];
+    if (!Array.isArray(db.categories)) db.categories = seedCategories();
+    if (!Array.isArray(db.orders)) db.orders = [];
+    if (!Array.isArray(db.orderItems)) db.orderItems = [];
+    if (!Array.isArray(db.cart)) db.cart = [];
+    if (!Array.isArray(db.reviews)) db.reviews = [];
     if (!Array.isArray(db.coupons)) db.coupons = [];
     if (!Array.isArray(db.newsletter)) db.newsletter = [];
     if (!Array.isArray(db.messages)) db.messages = [];
     if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
     if (!db.users.some(u => u.role === 'admin')) {
         const salt = crypto.randomBytes(16).toString('hex');
-        db.users.push({
-            id: nextId(db.users),
-            name: 'SwiftBuy Admin',
-            email: ADMIN_EMAIL,
-            salt,
-            passwordHash: hashPassword(ADMIN_PASSWORD, salt),
-            role: 'admin',
-            createdAt: Date.now()
-        });
-        saveDb();
-        console.log('Seeded admin account: ' + ADMIN_EMAIL + ' (password from ADMIN_PASSWORD env or default). CHANGE THE DEFAULT PASSWORD!');
+        db.users.push({ id: nextId(db.users), name: 'SwiftBuy Admin', email: ADMIN_EMAIL, salt, passwordHash: hashPassword(ADMIN_PASSWORD, salt), role: 'admin', createdAt: Date.now() });
     }
+    if (db.categories.length === 0) { db.categories = seedCategories(); }
+    saveDb();
 }
-
-function saveDb() {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+function seedDb() {
+    return { users: [], sellers: [], products: [], categories: seedCategories(), orders: [], orderItems: [], cart: [], reviews: [], coupons: [], newsletter: [], messages: [] };
 }
-
-const MIME = {
-    '.html': 'text/html; charset=utf-8',
-    '.js': 'text/javascript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml',
-    '.ico': 'image/x-icon',
-    '.webp': 'image/webp',
-    '.txt': 'text/plain; charset=utf-8'
-};
-
-function readBody(req) {
-    return new Promise((resolve, reject) => {
-        const chunks = [];
-        let size = 0;
-        req.on('data', chunk => {
-            chunks.push(chunk);
-            size += chunk.length;
-            if (size > 10 * 1024 * 1024) {
-                reject(new Error('Payload too large'));
-                req.destroy();
-            }
-        });
-        req.on('end', () => resolve(Buffer.concat(chunks)));
-        req.on('error', reject);
-    });
+function seedCategories() {
+    return [
+        { id: 1, name: 'Electronics', slug: 'electronics', icon: 'fa-solid fa-microchip' },
+        { id: 2, name: 'Fashion', slug: 'fashion', icon: 'fa-solid fa-shirt' },
+        { id: 3, name: 'Gaming', slug: 'gaming', icon: 'fa-solid fa-gamepad' },
+        { id: 4, name: 'Home & Kitchen', slug: 'home-kitchen', icon: 'fa-solid fa-kitchen-set' },
+        { id: 5, name: 'Beauty & Cosmetics', slug: 'beauty', icon: 'fa-solid fa-spa' },
+        { id: 6, name: 'Sports & Outdoors', slug: 'sports', icon: 'fa-solid fa-futbol' },
+        { id: 7, name: 'Books & Stationery', slug: 'books', icon: 'fa-solid fa-book' },
+        { id: 8, name: 'Phones & Accessories', slug: 'phones', icon: 'fa-solid fa-mobile-screen' },
+        { id: 9, name: 'Automotive', slug: 'automotive', icon: 'fa-solid fa-car' },
+        { id: 10, name: 'Toys & Kids', slug: 'toys', icon: 'fa-solid fa-baby' },
+    ];
 }
-
-function readJson(req) {
-    return readBody(req).then(buf => {
-        try {
-            return JSON.parse(buf.toString('utf8'));
-        } catch (e) {
-            return null;
-        }
-    });
-}
-
-function securityHeaders() {
-    return {
-        'X-Content-Type-Options': 'nosniff',
-        'X-Frame-Options': 'DENY',
-        'Referrer-Policy': 'no-referrer',
-        'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; font-src 'self' data: https://cdnjs.cloudflare.com; connect-src 'self' http://localhost:3000; base-uri 'self'; form-action 'self'"
-    };
-}
-
-function sendJson(res, code, obj) {
-    res.writeHead(code, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        ...securityHeaders()
-    });
-    res.end(JSON.stringify(obj));
-}
-
-function sendText(res, code, text) {
-    res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(text);
-}
-
-function nextId(list) {
-    return list.reduce((m, i) => Math.max(m, Number(i.id) || 0), 0) + 1;
-}
-
-function generateOrderCode() {
-    // Kenyan number plate format: K + 2 letters + 3 digits + 1 letter, e.g. KDA123A
-    const rand = (n) => Array.from({ length: n }, () => String.fromCharCode(65 + Math.floor(Math.random() * 26))).join('');
-    for (let attempt = 0; attempt < 50; attempt++) {
-        const code = 'K' + rand(2) + String(Math.floor(Math.random() * 1000)).padStart(3, '0') + rand(1);
-        if (!db.orders.some(o => String(o.id).toUpperCase() === code)) return code;
-    }
-    return 'K' + rand(2) + String(Date.now() % 1000).padStart(3, '0') + rand(1);
-}
-
-function maskPhone(phone) {
-    const p = String(phone || '');
-    return p.length <= 4 ? p : p.slice(0, 4) + '****' + p.slice(-2);
-}
-
-function maskName(name) {
-    const n = String(name || '');
-    const parts = n.trim().split(/\s+/);
-    if (parts.length === 0) return '';
-    return parts[0] + (parts.length > 1 ? ' ' + parts[1].charAt(0) + '.' : '');
-}
-
-function maskAddress(address) {
-    const a = String(address || '');
-    return a.length <= 12 ? a : a.slice(0, 12) + '...';
-}
-
-function fmtTime(ms) {
-    try {
-        return new Date(ms).toLocaleString('en-US', {
-            month: 'short', day: 'numeric', year: 'numeric',
-            hour: 'numeric', minute: '2-digit'
-        });
-    } catch (e) {
-        return new Date(ms).toISOString();
-    }
-}
-
+function fmtTime(ms) { try { return new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (e) { return new Date(ms).toISOString(); } }
+function maskPhone(p) { p = String(p || ''); return p.length <= 4 ? p : p.slice(0, 4) + '****' + p.slice(-2); }
+function maskName(n) { n = String(n || ''); const parts = n.trim().split(/\s+/); return parts.length === 0 ? '' : parts[0] + (parts.length > 1 ? ' ' + parts[1].charAt(0) + '.' : ''); }
 const HOUR = 3600000;
 const STATUS_ORDER = ['processing', 'packed', 'shipped', 'delivered'];
-
 function effectiveStatus(order) {
     if (order.status && STATUS_ORDER.includes(order.status)) return order.status;
     const elapsed = Date.now() - order.createdAt;
@@ -318,216 +91,63 @@ function effectiveStatus(order) {
     if (elapsed < 12 * HOUR) return 'shipped';
     return 'delivered';
 }
+const STATUS_LABEL = { pending: 'Pending', confirmed: 'Confirmed', processing: 'Processing', packed: 'Packed', shipped: 'Shipped', delivered: 'Delivered', cancelled: 'Cancelled' };
 
-const STATUS_LABEL = {
-    processing: 'Order Confirmed',
-    packed: 'Packed at Fulfillment',
-    shipped: 'Out for Delivery',
-    delivered: 'Delivered'
-};
-
-function publicOrder(order, opts) {
-    const mask = opts && opts.maskPII;
-    const status = effectiveStatus(order);
-    const idx = STATUS_ORDER.indexOf(status);
-    const steps = [
-        { label: 'Order Placed & Confirmed', time: fmtTime(order.createdAt) },
-        { label: 'Packed at SwiftBuy Fulfillment Center', time: fmtTime(order.createdAt + 2 * HOUR) },
-        { label: 'Out for Local Express Delivery', time: fmtTime(order.createdAt + 6 * HOUR) },
-        { label: 'Delivered to Customer', time: 'Estimated ' + fmtTime(order.createdAt + 12 * HOUR) }
-    ].map((s, i) => ({ ...s, done: i <= idx }));
-
-    return {
-        id: order.id,
-        customer: mask
-            ? {
-                name: maskName(order.customer.name),
-                phone: maskPhone(order.customer.phone),
-                address: maskAddress(order.customer.address)
-            }
-            : order.customer,
-        payment: order.payment,
-        items: order.items,
-        subtotal: order.subtotal,
-        coupon: order.coupon || null,
-        total: order.total,
-        createdAt: order.createdAt,
-        status,
-        statusLabel: STATUS_LABEL[status],
-        timeline: steps
-    };
+function sendJson(res, code, obj) {
+    res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; font-src 'self' data: https://cdnjs.cloudflare.com; base-uri 'self'; form-action 'self'" });
+    res.end(JSON.stringify(obj));
 }
-
-function validateProduct(body) {
-    const name = (body.name || '').toString().trim();
-    const price = Number(body.price);
-    const image = (body.image || '').toString().trim();
-    if (!name || !isFinite(price) || price <= 0 || !image) {
-        return { error: 'name, price (positive number) and image are required' };
-    }
-    let stock = Number(body.stock);
-    if (body.stock !== undefined && !isFinite(stock)) stock = 0;
-    if (stock < 0) stock = 0;
-    return {
-        product: {
-            name,
-            category: (body.category || 'Electronics').toString(),
-            badge: (body.badge || 'New Arrival').toString(),
-            price,
-            oldPrice: body.oldPrice ? Number(body.oldPrice) : null,
-            image,
-            description: (body.description || '').toString(),
-            flashSale: !!body.flashSale,
-            stock,
-            rating: body.rating ? Number(body.rating) : 4.5,
-            reviews: body.reviews ? Number(body.reviews) : 0
-        }
-    };
-}
-
-// ---------- AUTH ----------
-function hashPassword(password, salt) {
-    return crypto.scryptSync(String(password), salt, 64).toString('hex');
-}
-
-function createSession(userId) {
-    const token = crypto.randomBytes(24).toString('hex');
-    sessions[token] = { userId, expiresAt: Date.now() + SESSION_TTL };
-    return token;
-}
-
-function authUser(req) {
-    const header = req.headers['authorization'] || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-    const session = sessions[token];
-    if (!session) return null;
-    if (session.expiresAt <= Date.now()) {
-        delete sessions[token];
-        return null;
-    }
-    const user = db.users.find(u => u.id === session.userId) || null;
-    if (user && session.expiresAt - Date.now() < SESSION_TTL / 4) {
-        session.expiresAt = Date.now() + SESSION_TTL;
-    }
-    return user;
-}
-
-function authAdmin(req) {
-    const user = authUser(req);
-    return user && user.role === 'admin' ? user : null;
-}
-
-function publicUser(u) {
-    return { id: u.id, name: u.name, email: u.email, role: u.role || 'customer', createdAt: u.createdAt };
-}
-
-// ---------- STATS ----------
-function computeStats() {
-    const orders = db.orders;
-    const revenue = orders.reduce((s, o) => s + (o.total || 0), 0);
-    const unitsSold = orders.reduce((s, o) => s + o.items.reduce((a, i) => a + (i.qty || 0), 0), 0);
-    const byProduct = {};
-    orders.forEach(o => o.items.forEach(i => {
-        const key = i.name || 'Unknown';
-        byProduct[key] = byProduct[key] || { name: key, qty: 0, revenue: 0 };
-        byProduct[key].qty += i.qty || 0;
-        byProduct[key].revenue += (i.price || 0) * (i.qty || 0);
-    }));
-    const topProducts = Object.values(byProduct).sort((a, b) => b.qty - a.qty).slice(0, 5);
-    const pending = orders.filter(o => !['shipped', 'delivered'].includes(effectiveStatus(o))).length;
-    const delivered = orders.filter(o => effectiveStatus(o) === 'delivered').length;
-    return {
-        revenue,
-        totalOrders: orders.length,
-        unitsSold,
-        pendingOrders: pending,
-        deliveredOrders: delivered,
-        topProducts
-    };
-}
+function readBody(req) { return new Promise((resolve, reject) => { const chunks = []; let size = 0; req.on('data', chunk => { chunks.push(chunk); size += chunk.length; if (size > 10 * 1024 * 1024) { reject(new Error('Payload too large')); req.destroy(); } }); req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject); }); }
+function readJson(req) { return readBody(req).then(buf => { try { return JSON.parse(buf.toString('utf8')); } catch (e) { return null; } }); }
+function sanitize(str) { if (typeof str !== 'string') return ''; return str.replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c])).substring(0, 500); }
 
 const server = http.createServer(async (req, res) => {
     let pathname;
-    try {
-        pathname = decodeURIComponent(new URL(req.url, 'http://localhost:' + PORT).pathname);
-    } catch (e) {
-        return sendJson(res, 400, { error: 'Bad request' });
-    }
+    let query = {};
+    try { const urlObj = new URL(req.url, 'http://localhost:' + PORT); pathname = urlObj.pathname; query = Object.fromEntries(urlObj.searchParams.entries()); } catch (e) { return sendJson(res, 400, { error: 'Bad request' }); }
+    if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' }); return res.end(); }
 
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204, {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-            ...securityHeaders()
-        });
-        return res.end();
-    }
+    if (pathname === '/api/health') return sendJson(res, 200, { ok: true, products: db.products.length, orders: db.orders.length, users: db.users.length, sellers: db.sellers.length });
 
-    if (pathname === '/api/health') {
-        return sendJson(res, 200, { ok: true, products: db.products.length, orders: db.orders.length, users: db.users.length, coupons: db.coupons.length });
-    }
-
-    // ---------------- AUTH ----------------
+    // AUTH
     if (pathname === '/api/auth/register' && req.method === 'POST') {
-        if (!rateLimit(rateKey(req, 'reg'), 10, 60000)) {
-            return sendJson(res, 429, { error: 'Too many attempts. Please wait a minute.' });
-        }
+        if (!rateLimit('reg:' + (req.socket.remoteAddress || 'unknown'), 10, 60000)) return sendJson(res, 429, { error: 'Too many attempts.' });
         const body = await readJson(req);
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-        const name = (body.name || '').toString().trim();
-        const email = (body.email || '').toString().trim().toLowerCase();
-        const password = (body.password || '').toString();
-        if (!name || !email.includes('@') || password.length < 8) {
-            return sendJson(res, 400, { error: 'Name, valid email and a password of at least 8 characters are required' });
-        }
-        if (db.users.some(u => u.email === email)) {
-            return sendJson(res, 409, { error: 'An account with this email already exists. Try signing in.' });
-        }
+        if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const name = sanitize(body.name);
+        const email = sanitize(body.email).toLowerCase();
+        const password = String(body.password || '');
+        const role = (body.role || 'user').toString();
+        if (!name || !email.includes('@') || password.length < 8) return sendJson(res, 400, { error: 'Name, valid email and password (min 8 chars) required' });
+        if (db.users.some(u => u.email === email)) return sendJson(res, 409, { error: 'Email already registered' });
         const salt = crypto.randomBytes(16).toString('hex');
-        const user = { id: nextId(db.users), name, email, salt, passwordHash: hashPassword(password, salt), role: 'customer', createdAt: Date.now() };
+        const user = { id: nextId(db.users), name, email, salt, passwordHash: hashPassword(password, salt), role, createdAt: Date.now() };
         db.users.push(user);
+        if (role === 'seller') {
+            db.sellers.push({ id: user.id, userId: user.id, storeName: sanitize(body.storeName || name), description: sanitize(body.description || ''), profileImage: null, rating: 0, reviewCount: 0, isActive: true, isApproved: role === 'admin' || role === 'seller', createdAt: Date.now() });
+        }
         saveDb();
         const token = createSession(user.id);
-        return sendJson(res, 201, { token, user: publicUser(user) });
+        return sendJson(res, 201, { token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
     }
 
     if (pathname === '/api/auth/login' && req.method === 'POST') {
-        if (!rateLimit(rateKey(req, 'login'), 10, 60000)) {
-            return sendJson(res, 429, { error: 'Too many attempts. Please wait a minute.' });
-        }
+        if (!rateLimit('login:' + (req.socket.remoteAddress || 'unknown'), 10, 60000)) return sendJson(res, 429, { error: 'Too many attempts.' });
         const body = await readJson(req);
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-        const email = (body.email || '').toString().trim().toLowerCase();
-        const password = (body.password || '').toString();
+        if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const email = sanitize(body.email).toLowerCase();
+        const password = String(body.password || '');
         const user = db.users.find(u => u.email === email);
-        if (!user || !user.passwordHash || user.passwordHash !== hashPassword(password, user.salt)) {
-            return sendJson(res, 401, { error: 'Incorrect email or password' });
-        }
+        if (!user || !user.passwordHash || user.passwordHash !== hashPassword(password, user.salt)) return sendJson(res, 401, { error: 'Invalid credentials' });
         const token = createSession(user.id);
-        return sendJson(res, 200, { token, user: publicUser(user) });
-    }
-
-    if (pathname === '/api/auth/password' && req.method === 'PUT') {
-        const user = authUser(req);
-        if (!user) return sendJson(res, 401, { error: 'Not signed in' });
-        const body = await readJson(req);
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-        const password = (body.password || '').toString();
-        if (password.length < 8) {
-            return sendJson(res, 400, { error: 'Password must be at least 8 characters' });
-        }
-        const salt = crypto.randomBytes(16).toString('hex');
-        user.salt = salt;
-        user.passwordHash = hashPassword(password, salt);
-        saveDb();
-        return sendJson(res, 200, { ok: true });
+        return sendJson(res, 200, { token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
     }
 
     if (pathname === '/api/auth/me' && req.method === 'GET') {
         const user = authUser(req);
-        if (!user) return sendJson(res, 401, { error: 'Not signed in' });
-        return sendJson(res, 200, publicUser(user));
+        if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const seller = db.sellers.find(s => s.userId === user.id) || null;
+        return sendJson(res, 200, { id: user.id, name: user.name, email: user.email, role: user.role, seller: seller ? { id: seller.id, storeName: seller.storeName, description: seller.description, profileImage: seller.profileImage, rating: seller.rating, isApproved: seller.isApproved, isActive: seller.isActive } : null });
     }
 
     if (pathname === '/api/auth/logout' && req.method === 'POST') {
@@ -537,288 +157,411 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true });
     }
 
-    // ---------------- PRODUCTS ----------------
+    // CATEGORIES
+    if (pathname === '/api/categories' && req.method === 'GET') return sendJson(res, 200, db.categories);
+
+    // SELLERS
+    if (pathname === '/api/sellers/me' && req.method === 'GET') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const seller = db.sellers.find(s => s.userId === user.id);
+        return sendJson(res, 200, seller || { id: null, storeName: '', description: '', profileImage: null, rating: 0, reviewCount: 0, isActive: false, isApproved: false });
+    }
+    if (pathname === '/api/sellers/me' && req.method === 'PUT') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const seller = db.sellers.find(s => s.userId === user.id);
+        if (!seller) return sendJson(res, 404, { error: 'Seller profile not found' });
+        if (body.storeName) seller.storeName = sanitize(body.storeName);
+        if (body.description) seller.description = sanitize(body.description);
+        saveDb();
+        return sendJson(res, 200, { ok: true, seller });
+    }
+    if (pathname === '/api/sellers' && req.method === 'GET') {
+        const sellers = db.sellers.filter(s => s.isApproved && s.isActive).map(s => ({ id: s.id, storeName: s.storeName, description: s.description, profileImage: s.profileImage, rating: s.rating, reviewCount: s.reviewCount, userId: s.userId }));
+        return sendJson(res, 200, sellers);
+    }
+
+    // PRODUCTS
     if (pathname === '/api/products' && req.method === 'GET') {
-        return sendJson(res, 200, db.products);
+        let products = db.products.filter(p => p.status === 'approved');
+        const cat = req.query && req.query.category;
+        if (cat) products = products.filter(p => p.category === cat);
+        const q = req.query && req.query.q;
+        if (q) { const sq = q.toLowerCase(); products = products.filter(p => p.name.toLowerCase().includes(sq) || p.description.toLowerCase().includes(sq)); }
+        const sort = req.query && req.query.sort;
+        if (sort === 'price-low') products.sort((a, b) => a.price - b.price);
+        else if (sort === 'price-high') products.sort((a, b) => b.price - a.price);
+        else if (sort === 'newest') products.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        else if (sort === 'rating') products.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+        return sendJson(res, 200, products);
     }
 
     if (pathname === '/api/products' && req.method === 'POST') {
-        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-        const body = await readJson(req);
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-        const check = validateProduct(body);
-        if (check.error) return sendJson(res, 400, { error: check.error });
-        const product = { id: nextId(db.products), ...check.product };
-        db.products.unshift(product);
+        const user = authSeller(req); if (!user) return sendJson(res, 401, { error: 'Seller access required' });
+        const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const product = {
+            id: nextId(db.products), sellerId: user.id,
+            name: sanitize(body.name), description: sanitize(body.description),
+            category: sanitize(body.category), subcategory: sanitize(body.subcategory || ''),
+            price: Number(body.price) || 0, discountPrice: Number(body.discountPrice) || 0,
+            stock: Number(body.stock) || 0, condition: sanitize(body.condition || 'New'),
+            sku: sanitize(body.sku || ''), images: Array.isArray(body.images) ? body.images.map(s => sanitize(s)) : [],
+            colors: Array.isArray(body.colors) ? body.colors.map(s => sanitize(s)) : [],
+            sizes: Array.isArray(body.sizes) ? body.sizes.map(s => sanitize(s)) : [],
+            weight: sanitize(body.weight || ''), deliveryInfo: sanitize(body.deliveryInfo || ''),
+            status: 'pending', createdAt: Date.now(), updatedAt: Date.now(),
+            rating: 0, reviewCount: 0
+        };
+        db.products.push(product);
         saveDb();
         return sendJson(res, 201, product);
     }
 
-    let productsMatch = pathname.match(/^\/api\/products\/(\d+)$/);
-    if (productsMatch) {
-        const pid = Number(productsMatch[1]);
+    let productMatch = pathname.match(/^\/api\/products\/(\d+)$/);
+    if (productMatch) {
+        const pid = Number(productMatch[1]);
         const idx = db.products.findIndex(p => Number(p.id) === pid);
         if (idx === -1) return sendJson(res, 404, { error: 'Product not found' });
+        const prod = db.products[idx];
+
+        if (req.method === 'GET') return sendJson(res, 200, prod);
 
         if (req.method === 'PUT') {
-            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-            const body = await readJson(req);
-            if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-            const check = validateProduct(body);
-            if (check.error) return sendJson(res, 400, { error: check.error });
-            db.products[idx] = { ...db.products[idx], ...check.product, id: pid };
+            const user = authSeller(req); if (!user) return sendJson(res, 401, { error: 'Seller access required' });
+            if (prod.sellerId !== user.id && user.role !== 'admin') return sendJson(res, 403, { error: 'Cannot edit this product' });
+            const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+            if (body.name) prod.name = sanitize(body.name);
+            if (body.description) prod.description = sanitize(body.description);
+            if (body.category) prod.category = sanitize(body.category);
+            if (body.subcategory !== undefined) prod.subcategory = sanitize(body.subcategory);
+            if (body.price !== undefined) prod.price = Number(body.price) || 0;
+            if (body.discountPrice !== undefined) prod.discountPrice = Number(body.discountPrice) || 0;
+            if (body.stock !== undefined) prod.stock = Number(body.stock) || 0;
+            if (body.condition) prod.condition = sanitize(body.condition);
+            if (body.sku !== undefined) prod.sku = sanitize(body.sku);
+            if (Array.isArray(body.images)) prod.images = body.images.map(s => sanitize(s));
+            if (Array.isArray(body.colors)) prod.colors = body.colors.map(s => sanitize(s));
+            if (Array.isArray(body.sizes)) prod.sizes = body.sizes.map(s => sanitize(s));
+            if (body.weight !== undefined) prod.weight = sanitize(body.weight);
+            if (body.deliveryInfo !== undefined) prod.deliveryInfo = sanitize(body.deliveryInfo);
+            prod.updatedAt = Date.now();
             saveDb();
-            return sendJson(res, 200, db.products[idx]);
+            return sendJson(res, 200, prod);
         }
 
         if (req.method === 'DELETE') {
-            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-            const [removed] = db.products.splice(idx, 1);
-            db.orders.forEach(o => {
-                o.items = o.items.filter(i => Number(i.id) !== pid);
-            });
+            const user = authSeller(req); if (!user) return sendJson(res, 401, { error: 'Seller access required' });
+            if (prod.sellerId !== user.id && user.role !== 'admin') return sendJson(res, 403, { error: 'Cannot delete this product' });
+            db.products.splice(idx, 1);
             saveDb();
-            return sendJson(res, 200, { deleted: true, id: pid, name: removed.name });
+            return sendJson(res, 200, { deleted: true });
         }
-
-        return sendJson(res, 405, { error: 'Method not allowed' });
     }
 
-    // ---------------- ORDERS ----------------
-    if (pathname === '/api/orders' && req.method === 'GET') {
-        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-        return sendJson(res, 200, db.orders.slice().reverse().map(o => publicOrder(o, { maskPII: false })));
+    // Seller's products
+    if (pathname === '/api/products/seller' && req.method === 'GET') {
+        const user = authSeller(req); if (!user) return sendJson(res, 401, { error: 'Seller access required' });
+        const products = db.products.filter(p => p.sellerId === user.id);
+        return sendJson(res, 200, products);
     }
 
-    if (pathname === '/api/orders' && req.method === 'POST') {
-        const body = await readJson(req);
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-        const name = (body.name || '').toString().trim();
-        const phone = (body.phone || '').toString().trim();
-        const address = (body.address || '').toString().trim();
-        const payment = (body.payment || 'mpesa').toString();
-        const items = Array.isArray(body.items) && body.items.length ? body.items : null;
-
-        if (!name || !phone || !address || !items) {
-            return sendJson(res, 400, { error: 'name, phone, address and at least one item are required' });
-        }
-
-        // stock check + decrement
-        const verified = [];
-        for (const i of items) {
-            const prod = db.products.find(p => Number(p.id) === Number(i.id));
-            if (!prod) return sendJson(res, 400, { error: 'Product not found in inventory' });
-            const qty = Math.max(1, Math.min(Number(i.qty) || 1, 99));
-            const stock = (prod.stock === undefined || prod.stock === null) ? 9999 : prod.stock;
-            if (qty > stock) {
-                return sendJson(res, 409, { error: `Insufficient stock for "${prod.name}" (only ${stock} left)` });
-            }
-            prod.stock = stock - qty;
-            verified.push({ id: prod.id, name: prod.name, price: prod.price, qty, image: prod.image });
-        }
-
-        const subtotal = verified.reduce((s, i) => s + (Number(i.price) * i.qty), 0);
-
-        // coupon
-        let coupon = null;
-        let total = subtotal;
-        if (body.couponCode) {
-            const code = String(body.couponCode).trim().toUpperCase();
-            const c = db.coupons.find(x => String(x.code).toUpperCase() === code && x.active);
-            if (c) {
-                const discount = Math.round(subtotal * (c.percent / 100));
-                total = subtotal - discount;
-                coupon = { code: c.code, percent: c.percent, discount };
-            }
-        }
-
-        const order = {
-            id: generateOrderCode(),
-            customer: { name, phone, address },
-            payment,
-            items: verified,
-            subtotal,
-            coupon,
-            total,
-            status: null,
-            createdAt: Date.now()
-        };
-        db.orders.push(order);
+    // Approve/reject product (admin)
+    let productActionMatch = pathname.match(/^\/api\/products\/(\d+)\/(approve|reject)$/);
+    if (productActionMatch && req.method === 'PUT') {
+        const user = authAdmin(req); if (!user) return sendJson(res, 401, { error: 'Admin access required' });
+        const pid = Number(productActionMatch[1]);
+        const action = productActionMatch[2];
+        const prod = db.products.find(p => Number(p.id) === pid);
+        if (!prod) return sendJson(res, 404, { error: 'Product not found' });
+        prod.status = action === 'approve' ? 'approved' : 'rejected';
+        prod.updatedAt = Date.now();
         saveDb();
-        return sendJson(res, 201, publicOrder(order));
+        return sendJson(res, 200, { ok: true, product: prod });
     }
 
-    let ordersMatch = pathname.match(/^\/api\/orders\/([\w-]+)$/);
-    if (ordersMatch) {
-        const code = ordersMatch[1].toUpperCase();
-        const idx = db.orders.findIndex(o => String(o.id).toUpperCase() === code);
-        if (idx === -1) return sendJson(res, 404, { error: 'Order not found' });
-
-        if (req.method === 'GET') {
-            if (!rateLimit(rateKey(req, 'track'), 30, 60000)) {
-                return sendJson(res, 429, { error: 'Too many tracking lookups. Please slow down.' });
-            }
-            return sendJson(res, 200, publicOrder(db.orders[idx], { maskPII: true }));
-        }
-
-        if (req.method === 'PUT') {
-            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-            const body = await readJson(req);
-            if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-            if (body.status && !STATUS_ORDER.includes(body.status)) {
-                return sendJson(res, 400, { error: 'Invalid status' });
-            }
-            db.orders[idx].status = body.status || null;
-            saveDb();
-            return sendJson(res, 200, publicOrder(db.orders[idx], { maskPII: false }));
-        }
-
-        return sendJson(res, 405, { error: 'Method not allowed' });
+    // Pending products (admin)
+    if (pathname === '/api/products/pending' && req.method === 'GET') {
+        const user = authAdmin(req); if (!user) return sendJson(res, 401, { error: 'Admin access required' });
+        return sendJson(res, 200, db.products.filter(p => p.status === 'pending'));
     }
 
-    // ---------------- COUPONS ----------------
+    // Product stats (admin)
+    if (pathname === '/api/products/stats' && req.method === 'GET') {
+        const user = authSeller(req); if (!user && !authAdmin(req)) return sendJson(res, 401, { error: 'Access required' });
+        const sellerId = authAdmin(req) ? (req.query && req.query.sellerId) : null;
+        let products;
+        if (authSeller(req) && !authAdmin(req)) {
+            const user = authUser(req);
+            products = db.products.filter(p => p.sellerId === user.id);
+        } else {
+            products = db.products;
+        }
+        const stats = { total: products.length, approved: products.filter(p => p.status === 'approved').length, pending: products.filter(p => p.status === 'pending').length, rejected: products.filter(p => p.status === 'rejected').length, totalStock: products.reduce((s, p) => s + (p.stock || 0), 0), totalValue: products.reduce((s, p) => s + (p.price || 0) * (p.stock || 0), 0) };
+        return sendJson(res, 200, stats);
+    }
+
+    // CART
+    if (pathname === '/api/cart' && req.method === 'GET') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const items = db.cart.filter(c => c.userId === user.id).map(c => {
+            const prod = db.products.find(p => Number(p.id) === Number(c.productId));
+            return prod ? { ...c, product: prod } : null;
+        }).filter(Boolean);
+        return sendJson(res, 200, items);
+    }
+
+    if (pathname === '/api/cart' && req.method === 'POST') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const existing = db.cart.find(c => c.userId === user.id && Number(c.productId) === Number(body.productId));
+        if (existing) existing.qty = Math.min(99, existing.qty + 1);
+        else db.cart.push({ id: nextId(db.cart), userId: user.id, productId: Number(body.productId), qty: 1 });
+        saveDb();
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (pathname.match(/^\/api\/cart\/\d+$/) && req.method === 'PUT') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const cartId = Number(pathname.match(/^\/api\/cart\/(\d+)$/)[1]);
+        const item = db.cart.find(c => c.id === cartId && c.userId === user.id);
+        if (!item) return sendJson(res, 404, { error: 'Cart item not found' });
+        const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        item.qty = Math.max(1, Math.min(99, Number(body.qty) || 1));
+        saveDb();
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (pathname.match(/^\/api\/cart\/\d+$/) && req.method === 'DELETE') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const cartId = Number(pathname.match(/^\/api\/cart\/(\d+)$/)[1]);
+        db.cart = db.cart.filter(c => !(c.id === cartId && c.userId === user.id));
+        saveDb();
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (pathname === '/api/cart/clear' && req.method === 'POST') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        db.cart = db.cart.filter(c => c.userId !== user.id);
+        saveDb();
+        return sendJson(res, 200, { ok: true });
+    }
+
+    // REVIEWS
+    if (pathname === '/api/reviews' && req.method === 'GET') {
+        const query = new URL(req.url, 'http://localhost:' + PORT).searchParams;
+        const productId = Number(query.get('productId'));
+        if (!productId) return sendJson(res, 200, db.reviews);
+        return sendJson(res, 200, db.reviews.filter(r => Number(r.productId) === productId));
+    }
+
+    if (pathname === '/api/reviews' && req.method === 'POST') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const rating = Math.max(1, Math.min(5, Number(body.rating) || 5));
+        const review = { id: nextId(db.reviews), userId: user.id, productId: Number(body.productId), rating, text: sanitize(body.text || ''), createdAt: Date.now() };
+        db.reviews.push(review);
+        const prod = db.products.find(p => Number(p.id) === Number(body.productId));
+        if (prod) {
+            prod.rating = db.reviews.filter(r => Number(r.productId) === prod.id).reduce((s, r) => s + r.rating, 0) / db.reviews.filter(r => Number(r.productId) === prod.id).length;
+            prod.reviewCount = db.reviews.filter(r => Number(r.productId) === prod.id).length;
+        }
+        const seller = db.sellers.find(s => s.userId === prod && prod.sellerId);
+        saveDb();
+        return sendJson(res, 201, review);
+    }
+
+    // CHECKOUT
+    if (pathname === '/api/checkout' && req.method === 'POST') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const items = body.items;
+        if (!items || !items.length) return sendJson(res, 400, { error: 'No items in cart' });
+        const verified = [];
+        for (const item of items) {
+            const prod = db.products.find(p => Number(p.id) === Number(item.productId));
+            if (!prod || prod.status !== 'approved') return sendJson(res, 400, { error: `Product "${prod ? prod.name : item.productId}" is not available` });
+            const qty = Math.max(1, Math.min(Number(item.qty) || 1, 99));
+            const stock = prod.stock || 0;
+            if (qty > stock) return sendJson(res, 409, { error: `Insufficient stock for "${prod.name}"` });
+            prod.stock = stock - qty;
+            verified.push({ productId: prod.id, sellerId: prod.sellerId, name: prod.name, price: prod.price, qty, image: prod.images[0] || prod.image, condition: prod.condition });
+        }
+        const subtotal = verified.reduce((s, i) => s + i.price * i.qty, 0);
+        const orderId = 'ORD' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(2).toString('hex').toUpperCase();
+        const order = { id: orderId, userId: user.id, items: verified, subtotal, total: subtotal, status: 'pending', address: sanitize(body.address || ''), phone: sanitize(body.phone || ''), createdAt: Date.now() };
+        db.orders.push(order);
+        const orderItems = verified.map(item => ({ id: nextId(db.orderItems), orderId: order.id, productId: item.productId, sellerId: item.sellerId, userId: user.id, quantity: item.qty, price: item.price, createdAt: Date.now() }));
+        db.orderItems.push(...orderItems);
+        db.cart = db.cart.filter(c => c.userId !== user.id);
+        saveDb();
+        return sendJson(res, 201, order);
+    }
+
+    // ORDERS
+    if (pathname === '/api/orders' && req.method === 'GET') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        if (user.role === 'admin') {
+            const orders = db.orders.slice().reverse();
+            return sendJson(res, 200, orders);
+        }
+        const orders = db.orders.filter(o => o.userId === user.id).slice().reverse();
+        return sendJson(res, 200, orders);
+    }
+
+    if (pathname.match(/^\/api\/orders\/([\w-]+)$/) && req.method === 'GET') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const code = pathname.match(/^\/api\/orders\/([\w-]+)$/)[1];
+        const order = db.orders.find(o => o.id === code);
+        if (!order) return sendJson(res, 404, { error: 'Order not found' });
+        if (user.role !== 'admin' && order.userId !== user.id) {
+            const sellerItems = order.items.filter(i => {
+                const seller = db.sellers.find(s => s.userId === user.id);
+                return seller && i.sellerId === seller.id;
+            });
+            if (!sellerItems.length) return sendJson(res, 403, { error: 'Access denied' });
+        }
+        return sendJson(res, 200, order);
+    }
+
+    if (pathname.match(/^\/api\/orders\/([\w-]+)\/status$/) && req.method === 'PUT') {
+        const user = authSeller(req); if (!user) return sendJson(res, 401, { error: 'Seller access required' });
+        const code = pathname.match(/^\/api\/orders\/([\w-]+)\/status$/)[1];
+        const order = db.orders.find(o => o.id === code);
+        if (!order) return sendJson(res, 404, { error: 'Order not found' });
+        const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const newStatus = sanitize(body.status);
+        if (!STATUS_LABEL[newStatus]) return sendJson(res, 400, { error: 'Invalid status' });
+        const sellerItems = order.items.filter(i => {
+            const seller = db.sellers.find(s => s.userId === user.id);
+            return seller && i.sellerId === seller.id;
+        });
+        if (!sellerItems.length && user.role !== 'admin') return sendJson(res, 403, { error: 'Cannot update this order' });
+        order.status = newStatus;
+        saveDb();
+        return sendJson(res, 200, { ok: true, order });
+    }
+
+    if (pathname === '/api/orders/seller' && req.method === 'GET') {
+        const user = authSeller(req); if (!user) return sendJson(res, 401, { error: 'Seller access required' });
+        const orders = db.orders.filter(o => o.items.some(i => i.sellerId === user.id)).slice().reverse();
+        return sendJson(res, 200, orders);
+    }
+
+    // ADMIN - Users
+    if (pathname === '/api/admin/users' && req.method === 'GET') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
+        return sendJson(res, 200, db.users.map(u => ({ id: u.id, name: u.name, email: u.email, role: u.role, createdAt: u.createdAt })));
+    }
+
+    if (pathname === '/api/admin/sellers' && req.method === 'GET') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
+        return sendJson(res, 200, db.sellers.map(s => ({ id: s.id, userId: s.userId, storeName: s.storeName, description: s.description, profileImage: s.profileImage, rating: s.rating, reviewCount: s.reviewCount, isActive: s.isActive, isApproved: s.isApproved, createdAt: s.createdAt })));
+    }
+
+    if (pathname.match(/^\/api\/admin\/sellers\/(\d+)\/(approve|reject|suspend|activate)$/) && req.method === 'PUT') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
+        const sellerId = Number(pathname.match(/^\/api\/admin\/sellers\/(\d+)\/(approve|reject|suspend|activate)$/)[1]);
+        const action = pathname.match(/^\/api\/admin\/sellers\/(\d+)\/(approve|reject|suspend|activate)$/)[2];
+        const seller = db.sellers.find(s => s.id === sellerId);
+        if (!seller) return sendJson(res, 404, { error: 'Seller not found' });
+        if (action === 'approve') seller.isApproved = true;
+        else if (action === 'reject') seller.isApproved = false;
+        else if (action === 'suspend') seller.isActive = false;
+        else if (action === 'activate') seller.isActive = true;
+        saveDb();
+        return sendJson(res, 200, { ok: true, seller });
+    }
+
+    // ADMIN - Stats
+    if (pathname === '/api/admin/stats' && req.method === 'GET') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
+        const totalRevenue = db.orders.reduce((s, o) => s + (o.total || 0), 0);
+        const totalOrders = db.orders.length;
+        const totalUsers = db.users.length;
+        const totalSellers = db.sellers.length;
+        const totalProducts = db.products.length;
+        const pendingOrders = db.orders.filter(o => o.status === 'pending' || !o.status).length;
+        const deliveredOrders = db.orders.filter(o => o.status === 'delivered').length;
+        return sendJson(res, 200, { totalRevenue, totalOrders, totalUsers, totalSellers, totalProducts, pendingOrders, deliveredOrders, totalReviews: db.reviews.length, totalCartItems: db.cart.length });
+    }
+
+    // UPLOADS (any auth user)
+    if (pathname === '/api/upload' && req.method === 'POST') {
+        const user = authUser(req); if (!user) return sendJson(res, 401, { error: 'Not authenticated' });
+        const rawName = (req.headers['x-filename'] || 'image.jpg').toString().split(/[\\/]/).pop().toLowerCase();
+        const ext = path.extname(rawName) || '.jpg';
+        if (!['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) return sendJson(res, 400, { error: 'Only image files allowed' });
+        const buf = await readBody(req);
+        if (!buf || buf.length === 0) return sendJson(res, 400, { error: 'Empty upload' });
+        if (buf.length > 5 * 1024 * 1024) return sendJson(res, 400, { error: 'Image must be under 5 MB' });
+        const B = buf;
+        const magicOk = ((ext === '.jpg' || ext === '.jpeg') && B.length > 3 && B[0] === 0xFF && B[1] === 0xD8 && B[2] === 0xFF) || (ext === '.png' && B.length > 8 && B[0] === 0x89 && B[1] === 0x50 && B[2] === 0x4E && B[3] === 0x47) || (ext === '.gif' && B.length > 6 && B[0] === 0x47 && B[1] === 0x49 && B[2] === 0x46 && B[3] === 0x38) || (ext === '.webp' && B.length > 12 && B[0] === 0x52 && B[1] === 0x49 && B[2] === 0x46 && B[8] === 0x57 && B[9] === 0x45 && B[10] === 0x42 && B[11] === 0x50);
+        if (!magicOk) return sendJson(res, 400, { error: 'File contents do not match the image type' });
+        const filename = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + ext;
+        fs.writeFileSync(path.join(UPLOAD_DIR, filename), buf);
+        saveDb();
+        return sendJson(res, 201, { url: '/uploads/' + filename });
+    }
+
+    // COUPONS
     if (pathname === '/api/coupons' && req.method === 'GET') {
         if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
         return sendJson(res, 200, db.coupons);
     }
-
     if (pathname === '/api/coupons' && req.method === 'POST') {
         if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-        const body = await readJson(req);
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-        const code = (body.code || '').toString().trim().toUpperCase();
-        const percent = Number(body.percent);
-        if (!/^[A-Z0-9]{3,15}$/.test(code) || !isFinite(percent) || percent <= 0 || percent > 90) {
-            return sendJson(res, 400, { error: 'Code must be 3-15 letters/numbers and discount must be 1-90%' });
-        }
-        if (db.coupons.some(c => String(c.code).toUpperCase() === code)) {
-            return sendJson(res, 409, { error: 'Coupon code already exists' });
-        }
-        const coupon = { id: nextId(db.coupons), code, percent, active: body.active !== false, createdAt: Date.now() };
+        const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const code = sanitize(body.code).toUpperCase();
+        const percent = Math.max(1, Math.min(90, Number(body.percent) || 10));
+        if (!code) return sendJson(res, 400, { error: 'Coupon code required' });
+        if (db.coupons.some(c => c.code === code)) return sendJson(res, 409, { error: 'Coupon already exists' });
+        const coupon = { id: nextId(db.coupons), code, percent, active: true, createdAt: Date.now() };
         db.coupons.push(coupon);
         saveDb();
         return sendJson(res, 201, coupon);
     }
-
-    let couponMatch = pathname.match(/^\/api\/coupons\/(\d+)$/);
-    if (couponMatch) {
-        const cid = Number(couponMatch[1]);
-        const idx = db.coupons.findIndex(c => Number(c.id) === cid);
-        if (idx === -1) return sendJson(res, 404, { error: 'Coupon not found' });
-
-        if (req.method === 'PUT') {
-            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-            const body = await readJson(req);
-            if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-            if (body.active !== undefined) db.coupons[idx].active = !!body.active;
-            if (body.percent !== undefined) db.coupons[idx].percent = Number(body.percent);
-            if (body.code) db.coupons[idx].code = String(body.code).trim().toUpperCase();
-            saveDb();
-            return sendJson(res, 200, db.coupons[idx]);
-        }
-
-        if (req.method === 'DELETE') {
-            if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-            const [removed] = db.coupons.splice(idx, 1);
-            saveDb();
-            return sendJson(res, 200, { deleted: true, code: removed.code });
-        }
-
-        return sendJson(res, 405, { error: 'Method not allowed' });
+    if (pathname.match(/^\/api\/coupons\/(\d+)$/) && req.method === 'PUT') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
+        const cid = Number(pathname.match(/^\/api\/coupons\/(\d+)$/)[1]);
+        const coupon = db.coupons.find(c => c.id === cid);
+        if (!coupon) return sendJson(res, 404, { error: 'Coupon not found' });
+        coupon.active = !coupon.active;
+        saveDb();
+        return sendJson(res, 200, { ok: true, coupon });
     }
-
+    if (pathname.match(/^\/api\/coupons\/(\d+)$/) && req.method === 'DELETE') {
+        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
+        const cid = Number(pathname.match(/^\/api\/coupons\/(\d+)$/)[1]);
+        db.coupons = db.coupons.filter(c => c.id !== cid);
+        saveDb();
+        return sendJson(res, 200, { ok: true });
+    }
     if (pathname === '/api/coupons/validate' && req.method === 'POST') {
-        const body = await readJson(req);
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-        const code = (body.code || '').toString().trim().toUpperCase();
-        const c = db.coupons.find(x => String(x.code).toUpperCase() === code && x.active);
-        if (!c) return sendJson(res, 404, { error: 'Invalid or expired coupon code' });
-        return sendJson(res, 200, { code: c.code, percent: c.percent });
+        const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Invalid JSON' });
+        const code = sanitize(body.code).toUpperCase();
+        const coupon = db.coupons.find(c => c.code === code && c.active);
+        if (!coupon) return sendJson(res, 404, { error: 'Invalid or expired coupon' });
+        return sendJson(res, 200, { code: coupon.code, percent: coupon.percent });
     }
 
-    // ---------------- STATS ----------------
-    if (pathname === '/api/stats' && req.method === 'GET') {
-        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-        return sendJson(res, 200, computeStats());
-    }
-
-    // ---------------- UPLOADS ----------------
-    if (pathname === '/api/upload' && req.method === 'POST') {
-        if (!authAdmin(req)) return sendJson(res, 401, { error: 'Admin access required' });
-        const rawName = (req.headers['x-filename'] || 'image.jpg').toString().split(/[\\/]/).pop().toLowerCase();
-        const ext = path.extname(rawName) || '.jpg';
-        if (!['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) {
-            return sendJson(res, 400, { error: 'Only image files are allowed (jpg, png, gif, webp)' });
-        }
-        const buf = await readBody(req);
-        if (!buf || buf.length === 0) return sendJson(res, 400, { error: 'Empty upload' });
-        if (buf.length > 5 * 1024 * 1024) return sendJson(res, 400, { error: 'Image must be under 5 MB' });
-        // magic byte validation so file contents match the claimed extension
-        const B = buf;
-        const magicOk =
-            ((ext === '.jpg' || ext === '.jpeg') && B.length > 3 && B[0] === 0xFF && B[1] === 0xD8 && B[2] === 0xFF) ||
-            (ext === '.png' && B.length > 8 && B[0] === 0x89 && B[1] === 0x50 && B[2] === 0x4E && B[3] === 0x47) ||
-            (ext === '.gif' && B.length > 6 && B[0] === 0x47 && B[1] === 0x49 && B[2] === 0x46 && B[3] === 0x38) ||
-            (ext === '.webp' && B.length > 12 && B[0] === 0x52 && B[1] === 0x49 && B[2] === 0x46 && B[3] === 0x46 && B[8] === 0x57 && B[9] === 0x45 && B[10] === 0x42 && B[11] === 0x50);
-        if (!magicOk) {
-            return sendJson(res, 400, { error: 'File contents do not match the image type' });
-        }
-        const filename = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + ext;
-        fs.writeFileSync(path.join(UPLOAD_DIR, filename), buf);
-        return sendJson(res, 201, { url: '/uploads/' + filename });
-    }
-
-    // ---------------- NEWSLETTER & CONTACT ----------------
-    if (pathname === '/api/newsletter' && req.method === 'POST') {
-        const body = await readJson(req);
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-        const email = (body.email || '').toString().trim();
-        if (!email || !email.includes('@')) return sendJson(res, 400, { error: 'Valid email required' });
-        if (!db.newsletter.some(e => e.email === email)) db.newsletter.push({ email, at: Date.now() });
-        saveDb();
-        return sendJson(res, 201, { ok: true });
-    }
-
-    if (pathname === '/api/contact' && req.method === 'POST') {
-        const body = await readJson(req);
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-        const name = (body.name || '').toString().trim();
-        const email = (body.email || '').toString().trim();
-        const message = (body.message || '').toString().trim();
-        if (!name || !email || !message) return sendJson(res, 400, { error: 'name, email and message required' });
-        db.messages.push({ name, email, message, at: Date.now() });
-        saveDb();
-        return sendJson(res, 201, { ok: true });
-    }
-
-    // ---------------- STATIC FILES ----------------
-    if (pathname.startsWith('/api/')) {
-        return sendJson(res, 404, { error: 'Unknown API endpoint' });
-    }
+    // STATIC
+    if (pathname.startsWith('/api/')) return sendJson(res, 404, { error: 'Unknown API endpoint' });
 
     let filePath = pathname === '/' ? path.join(ROOT, 'index.html') : path.normalize(path.join(ROOT, pathname));
-    if (!filePath.startsWith(ROOT)) {
-        return sendText(res, 403, 'Forbidden');
-    }
-
+    if (!filePath.startsWith(ROOT)) return sendText(res, 403, 'Forbidden');
     fs.readFile(filePath, (err, content) => {
-        if (err) {
-            return sendText(res, 404, 'Not found');
-        }
+        if (err) return sendText(res, 404, 'Not found');
         const ext = path.extname(filePath).toLowerCase();
         const isUpload = filePath.startsWith(path.join(ROOT, 'uploads'));
-        res.writeHead(200, {
-            'Content-Type': MIME[ext] || 'application/octet-stream',
-            'Cache-Control': 'no-cache',
-            ...(isUpload ? { 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' } : securityHeaders())
-        });
-        res.end(content);
+        const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' };
+        if (isUpload) { headers['X-Content-Type-Options'] = 'nosniff'; headers['Content-Disposition'] = 'inline'; }
+        else Object.assign(headers, { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; font-src 'self' data: https://cdnjs.cloudflare.com; base-uri 'self'; form-action 'self'" });
+        res.writeHead(200, headers); res.end(content);
     });
 });
 
-loadDb();
+function sendText(res, code, text) { res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(text); }
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.webp': 'image/webp', '.txt': 'text/plain; charset=utf-8' };
 
-server.listen(PORT, '0.0.0.0', () => {
-     console.log('Abumira server running at http://0.0.0.0:' + PORT);
-    console.log('Products: ' + db.products.length + ' | Users: ' + db.users.length + ' | Coupons: ' + db.coupons.length);
-});
+loadDb();
+server.listen(PORT, '0.0.0.0', () => { console.log('Abumira marketplace server running at http://0.0.0.0:' + PORT); });
