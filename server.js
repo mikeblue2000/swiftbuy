@@ -739,4 +739,5 @@ const HOUR = 3600000;
 const STATUS_ORDER = ['processing', 'packed', 'shipped', 'delivered'];
 const PAYMENT_STATUSES = ['pending_payment', 'processing_payment', 'confirmed', 'payment_failed', 'cancelled', 'refunded'];
 const STATUS_ORDER_PAYMENT = ['processing', 'packed', 'shipped', 'delivered'];
+loadDb();
 server.listen(PORT, '0.0.0.0', () => { console.log('Abumira marketplace server running at http://0.0.0.0:' + PORT); });
